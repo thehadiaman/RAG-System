@@ -1,3 +1,5 @@
+import logging
+
 import uvicorn
 
 from app.config import get_settings
@@ -5,6 +7,10 @@ from app.config import get_settings
 
 def main() -> None:
     settings = get_settings()
+    logging.basicConfig(
+        level=settings.log_level.upper(),
+        format="%(levelname)-9s %(name)s - %(message)s",
+    )
     uvicorn.run(
         "app.main:app",
         host=settings.app_host,
