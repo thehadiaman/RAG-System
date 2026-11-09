@@ -1,0 +1,23 @@
+name: pdf-rag
+
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    image: pdf-rag:latest
+    # Host networking lets the container reach Ollama on 127.0.0.1:11434
+    # without changing Ollama's settings. The app listens on APP_HOST:APP_PORT.
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/app/data
+
+  test:
+    build:
+      context: .
+      target: test
+    image: pdf-rag:test
+    profiles: ["test"]
