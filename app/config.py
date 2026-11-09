@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,21 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     # How long a model stays in memory after its last use.
     ollama_keep_alive: str = "10m"
+
+    # AWS Bedrock. Keys can also come from ~/.aws or any other standard AWS source.
+    aws_region: str = "us-east-1"
+    aws_access_key_id: SecretStr | None = None
+    aws_secret_access_key: SecretStr | None = None
+    aws_session_token: SecretStr | None = None
+    bedrock_nova_lite_model_id: str = "amazon.nova-lite-v1:0"
+    # ARN of Qwen2.5-VL imported with Bedrock Custom Model Import. Empty = not used.
+    bedrock_qwen_vl_model_arn: str = ""
+    # Imported models sleep when idle; how long to wait for one to wake up (seconds).
+    bedrock_cold_start_wait: int = 300
+
+    def secret(self, name: str) -> str | None:
+        value = getattr(self, name)
+        return value.get_secret_value() if value else None
 
 
 @lru_cache

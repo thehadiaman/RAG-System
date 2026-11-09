@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=120 \
+    AWS_EC2_METADATA_DISABLED=true \
     DATA_DIR=/app/data
 
 # Match your host user so files written to ./data stay owned by you.
