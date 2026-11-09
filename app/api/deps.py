@@ -1,5 +1,6 @@
 from fastapi import Request
 
+from app.ingest.jobs import IngestQueue
 from app.llm.bedrock import BedrockClient
 from app.llm.embedder import Embedder
 from app.llm.ollama import OllamaClient
@@ -25,3 +26,7 @@ def get_db(request: Request) -> Database:
 
 def get_vectors(request: Request) -> VectorStore:
     return request.app.state.vectors
+
+
+def get_ingest(request: Request) -> IngestQueue:
+    return request.app.state.ingest

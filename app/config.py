@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     # Uploaded PDFs, page images, SQLite and ChromaDB all live under this folder.
     data_dir: Path = Path("data")
 
+    # PDF uploads
+    max_upload_mb: int = 100
+    page_preview_dpi: int = 100  # page images shown in the UI
+    figure_dpi: int = 200  # cropped charts and pictures sent to the vision model
+
     # Ollama on this machine (reachable from the container thanks to host networking).
     ollama_base_url: str = "http://127.0.0.1:11434"
     # How long a model stays in memory after its last use.

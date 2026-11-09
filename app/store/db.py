@@ -77,6 +77,27 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX messages_by_chat ON messages(chat_id, id);
     """,
+    # 2: page details and figures (charts, pictures) found in PDFs
+    """
+    ALTER TABLE pages ADD COLUMN char_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE pages ADD COLUMN table_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE pages ADD COLUMN needs_ocr INTEGER NOT NULL DEFAULT 0;
+
+    CREATE TABLE figures (
+        id              TEXT PRIMARY KEY,
+        document_id     TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        page_no         INTEGER NOT NULL,
+        position        INTEGER NOT NULL,  -- order on the page
+        source          TEXT NOT NULL,     -- which signal found it: layout, picture or drawing
+        x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL,
+        image_path      TEXT NOT NULL,
+        caption         TEXT,
+        text_inside     TEXT,
+        description     TEXT,              -- written by the vision model
+        described_by    TEXT
+    );
+    CREATE INDEX figures_by_document ON figures(document_id, page_no, position);
+    """,
 ]
 
 

@@ -1,6 +1,7 @@
 import pytest
 
 from app import __version__
+from app.store.db import MIGRATIONS
 from tests.fake_ollama import FakeOllama
 
 
@@ -10,7 +11,7 @@ def test_health_reports_every_component_ready(client):
     assert data["status"] == "ok"
     assert data["version"] == __version__
     assert data["components"] == {
-        "database": {"ok": True, "detail": "schema version 1"},
+        "database": {"ok": True, "detail": f"schema version {len(MIGRATIONS)}"},
         "vectors": {"ok": True, "detail": "0 chunks"},
         "embedder": {"ok": True, "detail": "nomic-embed-text"},
     }
