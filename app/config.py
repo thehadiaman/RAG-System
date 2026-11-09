@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     # How long a model stays in memory after its last use.
     ollama_keep_alive: str = "10m"
+    # Embedding model for search. Runs on CPU and is never unloaded.
+    ollama_embed_model: str = "nomic-embed-text"
+    embed_batch_size: int = 32
 
     # AWS Bedrock. Keys can also come from ~/.aws or any other standard AWS source.
     aws_region: str = "us-east-1"

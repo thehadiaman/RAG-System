@@ -6,11 +6,15 @@ Ask questions about your PDFs, including their images and financial charts, and 
 - **Reading charts and images in PDFs:** Qwen2.5-VL running locally in Ollama, or Amazon Nova Lite on AWS Bedrock.
 - **One server:** FastAPI serves both the API and the web page. Everything runs in Docker.
 
-The build is split into small phases; see [docs/PLAN.md](docs/PLAN.md). Current status: **Phase 3 of 13** (AWS Bedrock client).
+The build is split into small phases; see [docs/PLAN.md](docs/PLAN.md). Current status: **Phase 4 of 13** (storage and embeddings).
 
 ## Quick start
 
-Needs Docker with Compose, and Ollama running on this machine.
+Needs Docker with Compose, and Ollama running on this machine with the embedding model installed:
+
+```bash
+ollama pull nomic-embed-text
+```
 
 ```bash
 cp .env.example .env          # then edit if needed

@@ -8,7 +8,10 @@ from app import __version__
 from app.api import aws, health, models
 from app.config import Settings, get_settings
 from app.llm.bedrock import BedrockClient
+from app.llm.embedder import Embedder
 from app.llm.ollama import OllamaClient
+from app.store.db import Database
+from app.store.vectors import VectorStore
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -29,7 +32,17 @@ def make_bedrock(settings: Settings) -> BedrockClient:
 async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    app.state.ollama = OllamaClient(settings.ollama_base_url, keep_alive=settings.ollama_keep_alive)
+
+    app.state.db = Database(settings.data_dir / "app.db")
+    app.state.db.migrate()
+    app.state.vectors = VectorStore(settings.data_dir / "chroma")
+
+    app.state.ollama = OllamaClient(
+        settings.ollama_base_url,
+        keep_alive=settings.ollama_keep_alive,
+        keep_loaded=(settings.ollama_embed_model,),
+    )
+    app.state.embedder = Embedder(app.state.ollama, settings.ollama_embed_model, settings.embed_batch_size)
     app.state.bedrock = make_bedrock(settings)
     yield
     await app.state.ollama.aclose()

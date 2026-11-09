@@ -15,8 +15,9 @@ import httpx2
 
 log = logging.getLogger(__name__)
 
-# Loading a large model from disk can take a while.
+# Loading a large model from disk, or embedding a big batch on CPU, can take a while.
 LOAD_TIMEOUT = 300.0
+EMBED_TIMEOUT = 300.0
 
 
 class OllamaError(Exception):
@@ -61,9 +62,12 @@ class OllamaClient:
         keep_alive: str = "10m",
         timeout: float = 30.0,
         transport: httpx2.AsyncBaseTransport | None = None,
+        keep_loaded: tuple[str, ...] = (),
     ) -> None:
         self._http = httpx2.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
         self.keep_alive = keep_alive
+        # Models that use_only() never unloads (the embedder, which runs on CPU).
+        self.keep_loaded = tuple(full_name(name) for name in keep_loaded)
         self._capabilities_cache: dict[str, tuple[str, ...]] = {}
         self._switch_lock = asyncio.Lock()
 
@@ -120,6 +124,25 @@ class OllamaClient:
             self._capabilities_cache[key] = tuple(info.get("capabilities") or ())
         return self._capabilities_cache[key]
 
+    async def has_model(self, name: str) -> bool:
+        data = await self._request("GET", "/api/tags")
+        return any(full_name(item["name"]) == full_name(name) for item in data.get("models", []))
+
+    async def embed(
+        self,
+        model: str,
+        inputs: list[str],
+        keep_alive: str | int | None = None,
+        options: dict | None = None,
+    ) -> list[list[float]]:
+        payload: dict = {"model": model, "input": inputs}
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
+        if options:
+            payload["options"] = options
+        data = await self._request("POST", "/api/embed", json=payload, timeout=EMBED_TIMEOUT)
+        return data["embeddings"]
+
     async def loaded_models(self) -> list[str]:
         """Names of the models currently in memory."""
         data = await self._request("GET", "/api/ps")
@@ -138,12 +161,12 @@ class OllamaClient:
         await self._request("POST", "/api/generate", json={"model": name, "keep_alive": 0})
 
     async def use_only(self, name: str, keep: tuple[str, ...] = ()) -> list[str]:
-        """Make `name` the only model in memory, apart from the models in `keep`.
+        """Make `name` the only model in memory, apart from `keep_loaded` and `keep`.
 
         Returns the names of the models that were unloaded.
         """
         wanted = full_name(name)
-        spared = {wanted, *(full_name(k) for k in keep)}
+        spared = {wanted, *self.keep_loaded, *(full_name(k) for k in keep)}
 
         # One switch at a time, so two requests can't load two models at once.
         async with self._switch_lock:

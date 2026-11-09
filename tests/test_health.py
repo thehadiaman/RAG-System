@@ -1,11 +1,30 @@
+import pytest
+
 from app import __version__
+from tests.fake_ollama import FakeOllama
 
 
-def test_health_reports_ok(client):
+def test_health_reports_every_component_ready(client):
+    data = client.get("/api/health").json()
+
+    assert data["status"] == "ok"
+    assert data["version"] == __version__
+    assert data["components"] == {
+        "database": {"ok": True, "detail": "schema version 1"},
+        "vectors": {"ok": True, "detail": "0 chunks"},
+        "embedder": {"ok": True, "detail": "nomic-embed-text"},
+    }
+
+
+@pytest.mark.parametrize("fake_ollama", [FakeOllama(models={"llama3.2:3b": ["completion"]})])
+def test_health_is_degraded_without_the_embedding_model(client):
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": __version__}
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["components"]["embedder"]["ok"] is False
+    assert "ollama pull nomic-embed-text" in data["components"]["embedder"]["detail"]
 
 
 def test_index_page_is_served(client):
@@ -20,5 +39,6 @@ def test_unknown_api_route_is_404(client):
     assert client.get("/api/does-not-exist").status_code == 404
 
 
-def test_data_dir_created_on_startup(client, data_dir):
-    assert data_dir.is_dir()
+def test_startup_creates_the_database_and_vector_store(client, data_dir):
+    assert (data_dir / "app.db").is_file()
+    assert (data_dir / "chroma").is_dir()

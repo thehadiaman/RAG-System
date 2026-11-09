@@ -1,16 +1,30 @@
 """In-memory stand-in for the Ollama HTTP API, so tests don't need real models."""
 
 import json
+import math
+import re
+import zlib
 
 import httpx2
 
-from app.llm.ollama import OllamaClient
+from app.llm.ollama import OllamaClient, full_name
 
 DEFAULT_MODELS = {
     "llama3.2:3b": ["completion", "tools"],
     "qwen2.5vl:3b": ["completion", "vision"],
     "nomic-embed-text:latest": ["embedding"],
 }
+
+
+def fake_vector(text: str, dims: int = 16) -> list[float]:
+    """Bag-of-words vector: texts sharing words point the same way. Task prefixes are ignored."""
+    if text.startswith("search_"):
+        text = text.split(": ", 1)[-1]
+    vector = [0.0] * dims
+    for word in re.findall(r"[a-z]+", text.lower()):
+        vector[zlib.crc32(word.encode()) % dims] += 1.0
+    norm = math.sqrt(sum(x * x for x in vector)) or 1.0
+    return [x / norm for x in vector]
 
 
 class FakeOllama:
@@ -44,13 +58,21 @@ class FakeOllama:
             return httpx2.Response(200, json={"models": [{"name": n, "model": n} for n in self.loaded]})
 
         if route == ("POST", "/api/show"):
-            name = body["model"]
+            name = full_name(body["model"])
             if name not in self.models:
                 return self._not_found(name)
             return httpx2.Response(200, json={"capabilities": self.models[name]})
 
+        if route == ("POST", "/api/embed"):
+            name = full_name(body["model"])
+            if name not in self.models:
+                return self._not_found(name)
+            if name not in self.loaded:
+                self.loaded.append(name)
+            return httpx2.Response(200, json={"model": name, "embeddings": [fake_vector(t) for t in body["input"]]})
+
         if route == ("POST", "/api/generate"):
-            name = body["model"]
+            name = full_name(body["model"])
             if name not in self.models:
                 return self._not_found(name)
             if body.get("keep_alive") == 0:
@@ -75,4 +97,4 @@ class FakeOllama:
 
     @staticmethod
     def _not_found(name: str) -> httpx2.Response:
-        return httpx2.Response(404, json={"error": f"model '{name}' not found"})
+        return httpx2.Response(404, json={"error": f'model "{name}" not found, try pulling it first'})

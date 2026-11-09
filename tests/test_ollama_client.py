@@ -71,3 +71,21 @@ async def test_use_only_matches_names_with_or_without_latest_tag():
     unloaded = await fake.client().use_only("mistral")
 
     assert unloaded == []
+
+
+async def test_use_only_never_unloads_keep_loaded_models():
+    fake = FakeOllama(loaded=["nomic-embed-text:latest", "llama3.2:3b"])
+    client = fake.client(keep_loaded=("nomic-embed-text",))
+
+    unloaded = await client.use_only("qwen2.5vl:3b")
+
+    assert unloaded == ["llama3.2:3b"]
+    assert "nomic-embed-text:latest" in fake.loaded
+
+
+async def test_has_model_accepts_names_with_or_without_tag():
+    client = FakeOllama().client()
+
+    assert await client.has_model("nomic-embed-text")
+    assert await client.has_model("llama3.2:3b")
+    assert not await client.has_model("mistral")
