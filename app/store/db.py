@@ -98,6 +98,14 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX figures_by_document ON figures(document_id, page_no, position);
     """,
+    # 3: results of the vision step
+    """
+    ALTER TABLE figures ADD COLUMN kind TEXT;  -- chart, table, diagram, photo, decorative or other
+    ALTER TABLE figures ADD COLUMN describe_error TEXT;
+    ALTER TABLE pages ADD COLUMN text_source TEXT NOT NULL DEFAULT 'pdf';  -- 'pdf' or 'vision'
+    ALTER TABLE pages ADD COLUMN read_error TEXT;
+    ALTER TABLE documents ADD COLUMN warning TEXT;
+    """,
 ]
 
 

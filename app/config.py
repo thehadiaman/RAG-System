@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +22,14 @@ class Settings(BaseSettings):
     max_upload_mb: int = 100
     page_preview_dpi: int = 100  # page images shown in the UI
     figure_dpi: int = 200  # cropped charts and pictures sent to the vision model
+
+    # Vision step: who reads charts and scanned pages. "local" = Qwen2.5-VL in
+    # Ollama, "aws" = Nova Lite, "none" = only the PDF's own text.
+    default_extractor: Literal["local", "aws", "none"] = "local"
+    vision_local_model: str = "qwen2.5vl:latest"
+    vision_num_ctx: int = 8192  # room for one image plus the reply
+    vision_max_megapixels: float = 1.0  # figures with more pixels than this are scaled down first
+    vision_aws_concurrency: int = 4
 
     # Ollama on this machine (reachable from the container thanks to host networking).
     ollama_base_url: str = "http://127.0.0.1:11434"

@@ -7,8 +7,9 @@ Figures are found from three signals, because each one misses some cases:
 Small icons, thin banners, logos repeated on many pages and background images
 are dropped, and overlapping areas are merged into one figure.
 
-Everything here is blocking and must run in one worker thread per document
-(PyMuPDF objects must not be shared between threads).
+Everything here is blocking. PyMuPDF must never run on two threads at once,
+so every use of it goes through PDF_LOCK, held one page at a time so that
+other work (an upload check, a vision render) only waits briefly.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import collections
 import logging
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,6 +59,9 @@ CAPTION_WORDS = re.compile(r"^\s*(figure|fig\.|chart|graph|exhibit|table|source|
 PICTURE_TEXT = re.compile(r"<!-- Start of picture text -->(.*?)<!-- End of picture text -->", re.S)
 OMITTED_PICTURE = re.compile(r"\*\*==> picture .*? intentionally omitted <==\*\*")
 TABLE_SEPARATOR = re.compile(r"^\|(\s*:?-{3,}:?\s*\|)+\s*$", re.M)
+
+
+PDF_LOCK = threading.Lock()
 
 
 class PdfError(Exception):
@@ -103,11 +108,12 @@ def check_pdf(path: Path) -> int:
     with path.open("rb") as f:
         if not f.read(1024).lstrip().startswith(b"%PDF-"):
             raise PdfError("This file isn't a PDF.")
-    doc = open_pdf(path)
-    try:
-        return doc.page_count
-    finally:
-        doc.close()
+    with PDF_LOCK:
+        doc = open_pdf(path)
+        try:
+            return doc.page_count
+        finally:
+            doc.close()
 
 
 # ---- Whole document ----
@@ -129,25 +135,29 @@ def extract_document(
     pages_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    doc = open_pdf(pdf_path)
-    try:
+    with PDF_LOCK:
+        doc = open_pdf(pdf_path)
         repeated = repeated_image_xrefs(doc)
-        for page in doc:
-            result = extract_page(doc, page, repeated)
+    try:
+        for number in range(doc.page_count):
+            with PDF_LOCK:
+                page = doc[number]
+                result = extract_page(doc, page, repeated)
 
-            preview_path = pages_dir / f"{result.page_no:04d}.jpg"
-            render_page(page, preview_path, preview_dpi)
+                preview_path = pages_dir / f"{result.page_no:04d}.jpg"
+                render_page(page, preview_path, preview_dpi)
 
-            figure_paths = []
-            for i, figure in enumerate(result.figures, start=1):
-                path = figures_dir / f"p{result.page_no:04d}-{i:02d}.png"
-                crop(page, pymupdf.Rect(figure.bbox), path, figure_dpi)
-                figure_paths.append(path)
+                figure_paths = []
+                for i, figure in enumerate(result.figures, start=1):
+                    path = figures_dir / f"p{result.page_no:04d}-{i:02d}.png"
+                    crop(page, pymupdf.Rect(figure.bbox), path, figure_dpi)
+                    figure_paths.append(path)
 
             on_page(result, preview_path, figure_paths)
         return doc.page_count
     finally:
-        doc.close()
+        with PDF_LOCK:
+            doc.close()
 
 
 def repeated_image_xrefs(doc: pymupdf.Document) -> set[int]:
@@ -349,6 +359,37 @@ def caption_near(page: pymupdf.Page, rect: pymupdf.Rect, max_gap: float = 40) ->
 
 
 # ---- Rendering ----
+
+
+# Vision images are limited by their total pixel count, not their longest side.
+# A model's cost depends on the area, and a side limit would shrink wide or tall
+# charts until their labels are unreadable.
+
+
+def page_image_for_vision(pdf_path: Path, page_no: int, max_megapixels: float) -> bytes:
+    """A whole page as PNG, as sharp as the pixel budget allows (at most 200 dpi)."""
+    with PDF_LOCK:
+        doc = open_pdf(pdf_path)
+        try:
+            page = doc[page_no - 1]
+            square_inches = (page.rect.width / 72) * (page.rect.height / 72)
+            dpi = min(200, int((max_megapixels * 1_000_000 / square_inches) ** 0.5))
+            return page.get_pixmap(dpi=dpi).tobytes("png")
+        finally:
+            doc.close()
+
+
+def image_for_vision(path: Path, max_megapixels: float) -> bytes:
+    """An image file as PNG, scaled down if it has more than `max_megapixels` pixels."""
+    with PDF_LOCK:
+        pix = pymupdf.Pixmap(str(path))
+        pixels = pix.width * pix.height
+        if pixels > max_megapixels * 1_000_000:
+            scale = (max_megapixels * 1_000_000 / pixels) ** 0.5
+            pix = pymupdf.Pixmap(pix, max(1, int(pix.width * scale)), max(1, int(pix.height * scale)))
+        if pix.alpha:
+            pix = pymupdf.Pixmap(pix, 0)  # drop transparency
+        return pix.tobytes("png")
 
 
 def render_page(page: pymupdf.Page, path: Path, dpi: int) -> None:

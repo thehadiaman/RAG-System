@@ -5,14 +5,15 @@ import sqlite3
 from pathlib import Path as FilePath
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Path, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.api.deps import get_db, get_ingest, get_vectors
+from app.api.deps import get_db, get_ingest, get_vectors, get_vision
 from app.config import Settings, get_settings
 from app.ingest.jobs import IngestQueue, document_dir
 from app.ingest.pdf import PdfError, check_pdf
+from app.ingest.vision import Extractor, VisionService
 from app.store import documents
 from app.store.db import Database
 from app.store.vectors import VectorStore
@@ -35,8 +36,10 @@ class DocumentOut(BaseModel):
     size_bytes: int
     page_count: int | None
     status: str
+    extractor: str | None  # who reads charts and scanned pages: local, aws or none
     progress: Progress
-    error: str | None
+    error: str | None  # why processing failed
+    warning: str | None  # processing finished, but something was skipped
     created_at: str
     updated_at: str
 
@@ -62,7 +65,10 @@ class FigureOut(BaseModel):
     bbox: tuple[float, float, float, float]
     caption: str | None
     text_inside: str | None
+    kind: str | None  # chart, table, diagram, photo, decorative or other (set by the vision model)
     description: str | None
+    described_by: str | None
+    describe_error: str | None
     image_url: str
 
 
@@ -74,9 +80,11 @@ class DocumentDetail(DocumentOut):
 class PageDetail(BaseModel):
     page_no: int
     text: str
+    text_source: str  # "pdf", or "vision" for scanned pages read by the vision model
     char_count: int
     table_count: int
     needs_ocr: bool
+    read_error: str | None
     image_url: str
     figures: list[FigureOut]
 
@@ -86,7 +94,10 @@ class PageDetail(BaseModel):
 
 def _document(row: dict) -> dict:
     return {
-        **{key: row[key] for key in ("id", "filename", "size_bytes", "page_count", "status", "error")},
+        **{
+            key: row[key]
+            for key in ("id", "filename", "size_bytes", "page_count", "status", "extractor", "error", "warning")
+        },
         "progress": Progress(done=row["progress_done"], total=row["progress_total"], note=row["progress_note"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -99,7 +110,13 @@ def _page_url(doc_id: str, page_no: int) -> str:
 
 def _figure(row: dict) -> FigureOut:
     return FigureOut(
-        **{key: row[key] for key in ("id", "page_no", "position", "source", "caption", "text_inside", "description")},
+        **{
+            key: row[key]
+            for key in (
+                "id", "page_no", "position", "source", "caption", "text_inside",
+                "kind", "description", "described_by", "describe_error",
+            )
+        },
         bbox=(row["x0"], row["y0"], row["x1"], row["y1"]),
         image_url=f"/api/documents/{row['document_id']}/figures/{row['id']}/image",
     )
@@ -115,15 +132,30 @@ def _get_or_404(db: Database, doc_id: str) -> dict:
 # ---- Endpoints ----
 
 
+async def _check_extractor(vision: VisionService, extractor: str) -> None:
+    problem = await vision.problem(extractor)
+    if problem:
+        raise HTTPException(400, f"{vision.label(extractor)} can't be used: {problem}")
+
+
 @router.post("", status_code=201)
 async def upload(
     file: UploadFile,
     response: Response,
+    extractor: Annotated[Extractor | None, Form()] = None,
     db: Database = Depends(get_db),
     ingest: IngestQueue = Depends(get_ingest),
+    vision: VisionService = Depends(get_vision),
     settings: Settings = Depends(get_settings),
 ) -> UploadOut:
-    """Upload a PDF. It is read in the background; poll GET /api/documents/{id} for progress."""
+    """Upload a PDF. It is read in the background; poll GET /api/documents/{id} for progress.
+
+    `extractor` picks who reads charts and scanned pages: "local" (Qwen2.5-VL),
+    "aws" (Nova Lite) or "none". Leave it out to use DEFAULT_EXTRACTOR.
+    """
+    extractor = extractor or settings.default_extractor
+    await _check_extractor(vision, extractor)
+
     docs_root = settings.data_dir / "documents"
     docs_root.mkdir(parents=True, exist_ok=True)
     temp = docs_root / f".upload-{documents.new_id()}.pdf"
@@ -157,7 +189,7 @@ async def upload(
         temp.rename(folder / "original.pdf")
         filename = FilePath(file.filename or "document.pdf").name[:255]
         try:
-            row = documents.create(db, doc_id, filename, sha256, size, page_count)
+            row = documents.create(db, doc_id, filename, sha256, size, page_count, extractor)
         except sqlite3.IntegrityError:
             # The same file was uploaded twice at the same moment; keep the first.
             shutil.rmtree(folder, ignore_errors=True)
@@ -168,6 +200,29 @@ async def upload(
         return UploadOut(**_document(row), duplicate=False)
     finally:
         temp.unlink(missing_ok=True)
+
+
+@router.post("/{doc_id}/describe", status_code=202)
+async def describe_again(
+    doc_id: DocId,
+    extractor: Extractor,
+    db: Database = Depends(get_db),
+    ingest: IngestQueue = Depends(get_ingest),
+    vision: VisionService = Depends(get_vision),
+) -> DocumentOut:
+    """Run the vision step again, for example with the other model, replacing earlier results."""
+    row = _get_or_404(db, doc_id)
+    if row["status"] in documents.IN_PROGRESS:
+        raise HTTPException(409, "This document is still being processed. Try again when it's done.")
+    if row["status"] == documents.FAILED:
+        raise HTTPException(409, "This document failed to process. Delete it and upload it again.")
+    await _check_extractor(vision, extractor)
+
+    documents.reset_descriptions(db, doc_id)
+    documents.set_extractor(db, doc_id, extractor)
+    documents.set_status(db, doc_id, documents.DESCRIBING, note="Waiting for the vision model", done=0, total=0)
+    ingest.enqueue(doc_id)
+    return DocumentOut(**_document(documents.get(db, doc_id)))
 
 
 @router.get("")
@@ -194,9 +249,11 @@ async def get_page(doc_id: DocId, page_no: int, db: Database = Depends(get_db)) 
     return PageDetail(
         page_no=page_no,
         text=page["text"],
+        text_source=page["text_source"],
         char_count=page["char_count"],
         table_count=page["table_count"],
         needs_ocr=bool(page["needs_ocr"]),
+        read_error=page["read_error"],
         image_url=_page_url(doc_id, page_no),
         figures=[_figure(f) for f in documents.figures(db, doc_id, page_no)],
     )

@@ -5,9 +5,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import aws, documents, health, models
+from app.api import aws, documents, extractors, health, models
 from app.config import Settings, get_settings
 from app.ingest.jobs import IngestQueue
+from app.ingest.vision import VisionService
 from app.llm.bedrock import BedrockClient
 from app.llm.embedder import Embedder
 from app.llm.ollama import OllamaClient
@@ -15,6 +16,14 @@ from app.store.db import Database
 from app.store.vectors import VectorStore
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def make_ollama(settings: Settings) -> OllamaClient:
+    return OllamaClient(
+        settings.ollama_base_url,
+        keep_alive=settings.ollama_keep_alive,
+        keep_loaded=(settings.ollama_embed_model,),
+    )
 
 
 def make_bedrock(settings: Settings) -> BedrockClient:
@@ -38,16 +47,24 @@ async def lifespan(app: FastAPI):
     app.state.db.migrate()
     app.state.vectors = VectorStore(settings.data_dir / "chroma")
 
-    app.state.ollama = OllamaClient(
-        settings.ollama_base_url,
-        keep_alive=settings.ollama_keep_alive,
-        keep_loaded=(settings.ollama_embed_model,),
-    )
+    app.state.ollama = make_ollama(settings)
     app.state.embedder = Embedder(app.state.ollama, settings.ollama_embed_model, settings.embed_batch_size)
     app.state.bedrock = make_bedrock(settings)
+    app.state.vision = VisionService(
+        app.state.ollama,
+        app.state.bedrock,
+        local_model=settings.vision_local_model,
+        num_ctx=settings.vision_num_ctx,
+        max_megapixels=settings.vision_max_megapixels,
+        aws_concurrency=settings.vision_aws_concurrency,
+    )
 
     app.state.ingest = IngestQueue(
-        app.state.db, settings.data_dir, settings.page_preview_dpi, settings.figure_dpi
+        app.state.db,
+        settings.data_dir,
+        settings.page_preview_dpi,
+        settings.figure_dpi,
+        vision=app.state.vision,
     )
     app.state.ingest.start()
     yield
@@ -61,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(models.router, prefix="/api")
     app.include_router(aws.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
+    app.include_router(extractors.router, prefix="/api")
 
     # The web UI is plain static files served by this same server.
     # Mounted last so every /api route takes priority.

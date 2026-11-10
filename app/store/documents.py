@@ -8,15 +8,16 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from app.ingest.pdf import PageResult
+from app.ingest.pdf import TABLE_SEPARATOR, PageResult
 from app.store.db import NOW, Database
 
 # Document status, in the order a document moves through them.
 QUEUED = "queued"
-EXTRACTING = "extracting"
+EXTRACTING = "extracting"  # reading text, tables and figures from the PDF
+DESCRIBING = "describing"  # the vision model reads figures and scanned pages
 EXTRACTED = "extracted"
 FAILED = "failed"
-IN_PROGRESS = (QUEUED, EXTRACTING)
+IN_PROGRESS = (QUEUED, EXTRACTING, DESCRIBING)
 
 
 class DocumentGone(Exception):
@@ -27,11 +28,20 @@ def new_id() -> str:
     return uuid.uuid4().hex
 
 
-def create(db: Database, doc_id: str, filename: str, sha256: str, size_bytes: int, page_count: int) -> dict:
+def create(
+    db: Database,
+    doc_id: str,
+    filename: str,
+    sha256: str,
+    size_bytes: int,
+    page_count: int,
+    extractor: str = "none",
+) -> dict:
     with db.session() as conn:
         conn.execute(
-            "INSERT INTO documents (id, filename, sha256, size_bytes, page_count, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (doc_id, filename, sha256, size_bytes, page_count, QUEUED),
+            """INSERT INTO documents (id, filename, sha256, size_bytes, page_count, status, extractor)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (doc_id, filename, sha256, size_bytes, page_count, QUEUED, extractor),
         )
     return get(db, doc_id)
 
@@ -72,6 +82,7 @@ def set_status(
     done: int | None = None,
     total: int | None = None,
     error: str | None = None,
+    warning: str | None = None,
 ) -> None:
     with db.session() as conn:
         cursor = conn.execute(
@@ -81,9 +92,10 @@ def set_status(
                    progress_done = COALESCE(?, progress_done),
                    progress_total = COALESCE(?, progress_total),
                    error = ?,
+                   warning = ?,
                    updated_at = {NOW}
                WHERE id = ?""",
-            (status, note, done, total, error, doc_id),
+            (status, note, done, total, error, warning, doc_id),
         )
         if cursor.rowcount == 0:
             raise DocumentGone(doc_id)
@@ -178,6 +190,85 @@ def figure(db: Database, doc_id: str, figure_id: str) -> dict | None:
             "SELECT * FROM figures WHERE document_id = ? AND id = ?", (doc_id, figure_id)
         ).fetchone()
     return dict(row) if row else None
+
+
+def set_extractor(db: Database, doc_id: str, extractor: str) -> None:
+    with db.session() as conn:
+        if conn.execute("UPDATE documents SET extractor = ? WHERE id = ?", (extractor, doc_id)).rowcount == 0:
+            raise DocumentGone(doc_id)
+
+
+# ---- Vision step ----
+
+
+def figures_to_describe(db: Database, doc_id: str) -> list[dict]:
+    """Figures without a description yet (so a restarted run skips finished ones)."""
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM figures WHERE document_id = ? AND description IS NULL ORDER BY page_no, position",
+            (doc_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def scanned_pages_to_read(db: Database, doc_id: str) -> list[dict]:
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pages WHERE document_id = ? AND needs_ocr = 1 AND text_source = 'pdf' ORDER BY page_no",
+            (doc_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_figure_description(db: Database, figure_id: str, kind: str, description: str, described_by: str) -> None:
+    with db.session() as conn:
+        cursor = conn.execute(
+            """UPDATE figures SET kind = ?, description = ?, described_by = ?, describe_error = NULL
+               WHERE id = ?""",
+            (kind, description, described_by, figure_id),
+        )
+        if cursor.rowcount == 0:
+            raise DocumentGone(figure_id)
+
+
+def save_figure_error(db: Database, figure_id: str, error: str) -> None:
+    with db.session() as conn:
+        conn.execute("UPDATE figures SET describe_error = ? WHERE id = ?", (error, figure_id))
+
+
+def save_page_transcription(db: Database, doc_id: str, page_no: int, text: str) -> None:
+    """A scanned page's text, read by the vision model, replaces its (empty) PDF text."""
+    with db.session() as conn:
+        cursor = conn.execute(
+            """UPDATE pages SET text = ?, char_count = ?, table_count = ?, text_source = 'vision', read_error = NULL
+               WHERE document_id = ? AND page_no = ?""",
+            (text, len(text), len(TABLE_SEPARATOR.findall(text)), doc_id, page_no),
+        )
+        if cursor.rowcount == 0:
+            raise DocumentGone(doc_id)
+
+
+def save_page_error(db: Database, doc_id: str, page_no: int, error: str) -> None:
+    with db.session() as conn:
+        conn.execute(
+            "UPDATE pages SET read_error = ? WHERE document_id = ? AND page_no = ?", (error, doc_id, page_no)
+        )
+
+
+def reset_descriptions(db: Database, doc_id: str) -> None:
+    """Forget the vision step's results, so it can run again (maybe with another model)."""
+    with db.session() as conn:
+        conn.execute(
+            """UPDATE figures SET kind = NULL, description = NULL, described_by = NULL, describe_error = NULL
+               WHERE document_id = ?""",
+            (doc_id,),
+        )
+        conn.execute(
+            """UPDATE pages SET text = '', char_count = 0, table_count = 0, text_source = 'pdf', read_error = NULL
+               WHERE document_id = ? AND text_source = 'vision'""",
+            (doc_id,),
+        )
+        conn.execute("UPDATE pages SET read_error = NULL WHERE document_id = ?", (doc_id,))
 
 
 def delete(db: Database, doc_id: str) -> bool:

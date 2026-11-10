@@ -15,6 +15,7 @@ class FakeBedrock:
         error: str | None = None,
     ):
         self.region = "us-east-1"
+        self.nova_model_id = "amazon.nova-lite-v1:0"
         self.configured = configured
         self.nova_reply = nova_reply
         self.qwen_reply = qwen_reply

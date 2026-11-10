@@ -1,6 +1,7 @@
 from fastapi import Request
 
 from app.ingest.jobs import IngestQueue
+from app.ingest.vision import VisionService
 from app.llm.bedrock import BedrockClient
 from app.llm.embedder import Embedder
 from app.llm.ollama import OllamaClient
@@ -30,3 +31,7 @@ def get_vectors(request: Request) -> VectorStore:
 
 def get_ingest(request: Request) -> IngestQueue:
     return request.app.state.ingest
+
+
+def get_vision(request: Request) -> VisionService:
+    return request.app.state.vision

@@ -1,8 +1,10 @@
 """Processes uploaded PDFs in the background, one document at a time.
 
-One at a time because extraction is CPU-heavy, and the vision step (next phase)
-needs the GPU, which only fits one model. Documents left unfinished when the
-app stopped are picked up again on the next start.
+Steps: read the PDF (text, tables, figures), then let a vision model read the
+figures and scanned pages. One document at a time because reading is
+CPU-heavy and the local vision model needs the whole GPU. Documents left
+unfinished when the app stopped are picked up again on the next start, from
+the step they were in.
 """
 
 from __future__ import annotations
@@ -13,10 +15,12 @@ import shutil
 import threading
 from pathlib import Path
 
+from app.ingest.describe import describe_document
 from app.ingest.pdf import PageResult, extract_document
+from app.ingest.vision import VisionService
 from app.store import documents
 from app.store.db import Database
-from app.store.documents import EXTRACTED, EXTRACTING, FAILED, IN_PROGRESS, DocumentGone
+from app.store.documents import DESCRIBING, EXTRACTED, EXTRACTING, FAILED, IN_PROGRESS, QUEUED, DocumentGone
 
 log = logging.getLogger(__name__)
 
@@ -30,11 +34,19 @@ def document_dir(data_dir: Path, doc_id: str) -> Path:
 
 
 class IngestQueue:
-    def __init__(self, db: Database, data_dir: Path, preview_dpi: int = 100, figure_dpi: int = 200) -> None:
+    def __init__(
+        self,
+        db: Database,
+        data_dir: Path,
+        preview_dpi: int = 100,
+        figure_dpi: int = 200,
+        vision: VisionService | None = None,
+    ) -> None:
         self.db = db
         self.data_dir = data_dir
         self.preview_dpi = preview_dpi
         self.figure_dpi = figure_dpi
+        self.vision = vision
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._worker: asyncio.Task | None = None
         self._stopping = threading.Event()
@@ -75,6 +87,24 @@ class IngestQueue:
         if doc is None:
             return
         total = doc["page_count"] or 0
+        try:
+            if doc["status"] in (QUEUED, EXTRACTING):
+                await self._extract(doc_id, total)
+            warning = await self._describe(doc_id, doc["extractor"] or "none")
+            documents.set_status(self.db, doc_id, EXTRACTED, note=None, done=total, total=total, warning=warning)
+            log.info("Finished %s (%d pages)%s", doc_id, total, f" with a warning: {warning}" if warning else "")
+        except _Stopping:
+            log.info("Stopped while processing %s; it will resume on the next start", doc_id)
+        except DocumentGone:
+            log.info("Document %s was deleted while it was being processed", doc_id)
+        except Exception as exc:  # noqa: BLE001 - recorded on the document for the user to see
+            log.exception("Failed to process %s", doc_id)
+            try:
+                documents.set_status(self.db, doc_id, FAILED, error=str(exc) or type(exc).__name__)
+            except DocumentGone:
+                pass
+
+    async def _extract(self, doc_id: str, total: int) -> None:
         folder = document_dir(self.data_dir, doc_id)
 
         def on_page(result: PageResult, preview: Path, figure_paths: list[Path]) -> None:
@@ -90,25 +120,47 @@ class IngestQueue:
                 total=total,
             )
 
-        try:
-            # Start clean, in case an earlier run stopped halfway.
-            documents.clear_extraction(self.db, doc_id)
-            for sub in ("pages", "figures"):
-                shutil.rmtree(folder / sub, ignore_errors=True)
-            documents.set_status(self.db, doc_id, EXTRACTING, note="Reading pages", done=0, total=total)
+        # Start clean, in case an earlier run stopped halfway.
+        documents.clear_extraction(self.db, doc_id)
+        for sub in ("pages", "figures"):
+            shutil.rmtree(folder / sub, ignore_errors=True)
+        documents.set_status(self.db, doc_id, EXTRACTING, note="Reading pages", done=0, total=total)
 
-            await asyncio.to_thread(
-                extract_document, folder / "original.pdf", folder, on_page, self.preview_dpi, self.figure_dpi
+        await asyncio.to_thread(
+            extract_document, folder / "original.pdf", folder, on_page, self.preview_dpi, self.figure_dpi
+        )
+
+    async def _describe(self, doc_id: str, extractor: str) -> str | None:
+        """Runs the vision step. Returns a warning for the user, or None if all went well."""
+        if extractor == "none":
+            return None
+        if self.vision is None:
+            return "Charts and scanned pages were not read: no vision model is set up."
+        problem = await self.vision.problem(extractor)
+        if problem:
+            return f"Charts and scanned pages were not read: {problem}"
+
+        documents.set_status(self.db, doc_id, DESCRIBING, note="Loading the vision model", done=0, total=0)
+
+        def on_progress(done: int, total: int) -> None:
+            documents.set_status(
+                self.db,
+                doc_id,
+                DESCRIBING,
+                note=f"Reading figures and scanned pages: {done} of {total}",
+                done=done,
+                total=total,
             )
-            documents.set_status(self.db, doc_id, EXTRACTED, note=None, done=total, total=total)
-            log.info("Extracted %s (%d pages)", doc_id, total)
-        except _Stopping:
-            log.info("Stopped while reading %s; it will resume on the next start", doc_id)
-        except DocumentGone:
-            log.info("Document %s was deleted while it was being read", doc_id)
-        except Exception as exc:  # noqa: BLE001 - recorded on the document for the user to see
-            log.exception("Failed to read %s", doc_id)
-            try:
-                documents.set_status(self.db, doc_id, FAILED, error=str(exc) or type(exc).__name__)
-            except DocumentGone:
-                pass
+
+        outcome = await describe_document(
+            self.db,
+            self.data_dir,
+            doc_id,
+            self.vision.describer(extractor),
+            self.vision.max_megapixels,
+            on_progress,
+            should_stop=self._stopping.is_set,
+        )
+        if outcome.interrupted:
+            raise _Stopping
+        return outcome.warning()

@@ -27,12 +27,31 @@ def fake_vector(text: str, dims: int = 16) -> list[float]:
     return [x / norm for x in vector]
 
 
+FIGURE_REPLY = """Type: chart
+Title: Revenue by year
+Description: A bar chart of revenue from 2018 to 2025.
+Data:
+| Year | Revenue (AED m) |
+|---|---|
+| 2018 | 120 |
+| 2025 | 270 |"""
+
+SCANNED_REPLY = "# Scanned page\n\nTotal revenue was AED 5 million."
+
+
+def default_chat_reply(body: dict) -> str:
+    prompt = body["messages"][-1]["content"]
+    return SCANNED_REPLY if "scanned PDF" in prompt else FIGURE_REPLY
+
+
 class FakeOllama:
     def __init__(self, models: dict[str, list[str]] | None = None, loaded=(), reachable=True):
         self.models = dict(DEFAULT_MODELS if models is None else models)
         self.loaded = list(loaded)
         self.reachable = reachable
         self.calls: list[tuple[str, str, dict]] = []
+        self.chat_reply = default_chat_reply
+        self.chat_failures = 0  # the next this-many chat calls fail
 
     def client(self, **kwargs) -> OllamaClient:
         return OllamaClient("http://ollama.test", transport=httpx2.MockTransport(self.handle), **kwargs)
@@ -70,6 +89,18 @@ class FakeOllama:
             if name not in self.loaded:
                 self.loaded.append(name)
             return httpx2.Response(200, json={"model": name, "embeddings": [fake_vector(t) for t in body["input"]]})
+
+        if route == ("POST", "/api/chat"):
+            name = full_name(body["model"])
+            if name not in self.models:
+                return self._not_found(name)
+            if self.chat_failures > 0:
+                self.chat_failures -= 1
+                return httpx2.Response(500, json={"error": "model runner crashed"})
+            if name not in self.loaded:
+                self.loaded.append(name)
+            message = {"role": "assistant", "content": self.chat_reply(body)}
+            return httpx2.Response(200, json={"model": name, "message": message, "done": True})
 
         if route == ("POST", "/api/generate"):
             name = full_name(body["model"])

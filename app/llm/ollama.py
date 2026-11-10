@@ -8,16 +8,21 @@ before loading the model that is about to be used.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 from dataclasses import dataclass
 
 import httpx2
+
+from app.llm.messages import ChatMessage
 
 log = logging.getLogger(__name__)
 
 # Loading a large model from disk, or embedding a big batch on CPU, can take a while.
 LOAD_TIMEOUT = 300.0
 EMBED_TIMEOUT = 300.0
+# A vision model partly on CPU can take minutes for one large image.
+CHAT_TIMEOUT = 600.0
 
 
 class OllamaError(Exception):
@@ -148,19 +153,37 @@ class OllamaClient:
         data = await self._request("GET", "/api/ps")
         return [item["name"] for item in data.get("models", [])]
 
-    async def load(self, name: str) -> None:
-        # A generate request without a prompt only loads the model.
-        await self._request(
-            "POST",
-            "/api/generate",
-            json={"model": name, "keep_alive": self.keep_alive},
-            timeout=LOAD_TIMEOUT,
-        )
+    async def load(self, name: str, options: dict | None = None) -> None:
+        # A generate request without a prompt only loads the model. Pass the same
+        # options (like num_ctx) later calls will use, or Ollama reloads it then.
+        payload: dict = {"model": name, "keep_alive": self.keep_alive}
+        if options:
+            payload["options"] = options
+        await self._request("POST", "/api/generate", json=payload, timeout=LOAD_TIMEOUT)
+
+    async def chat(
+        self,
+        model: str,
+        messages: list[ChatMessage],
+        system: str | None = None,
+        options: dict | None = None,
+    ) -> str:
+        """One complete reply (no streaming). Images are sent with the message they belong to."""
+        payload: dict = {
+            "model": model,
+            "messages": _chat_messages(messages, system),
+            "stream": False,
+            "keep_alive": self.keep_alive,
+        }
+        if options:
+            payload["options"] = options
+        data = await self._request("POST", "/api/chat", json=payload, timeout=CHAT_TIMEOUT)
+        return data.get("message", {}).get("content", "")
 
     async def unload(self, name: str) -> None:
         await self._request("POST", "/api/generate", json={"model": name, "keep_alive": 0})
 
-    async def use_only(self, name: str, keep: tuple[str, ...] = ()) -> list[str]:
+    async def use_only(self, name: str, keep: tuple[str, ...] = (), options: dict | None = None) -> list[str]:
         """Make `name` the only model in memory, apart from `keep_loaded` and `keep`.
 
         Returns the names of the models that were unloaded.
@@ -177,5 +200,15 @@ class OllamaClient:
                 log.info("Unloading %s to make room for %s", loaded, wanted)
                 await self.unload(loaded)
                 unloaded.append(loaded)
-            await self.load(wanted)
+            await self.load(wanted, options)
             return unloaded
+
+
+def _chat_messages(messages: list[ChatMessage], system: str | None) -> list[dict]:
+    result = [{"role": "system", "content": system}] if system else []
+    for m in messages:
+        item: dict = {"role": m.role, "content": m.text}
+        if m.images:
+            item["images"] = [base64.b64encode(img.data).decode("ascii") for img in m.images]
+        result.append(item)
+    return result

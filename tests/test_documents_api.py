@@ -3,12 +3,14 @@ import time
 import pytest
 
 from app.config import get_settings
+from tests.fake_bedrock import FakeBedrock
 from tests.pdf_factory import build_password_pdf, build_sample_pdf, build_text_pdf
 
 
-def upload(client, path, name=None):
+def upload(client, path, name=None, extractor=None):
+    data = {"extractor": extractor} if extractor else {}
     with path.open("rb") as f:
-        return client.post("/api/documents", files={"file": (name or path.name, f, "application/pdf")})
+        return client.post("/api/documents", files={"file": (name or path.name, f, "application/pdf")}, data=data)
 
 
 def wait_for(client, doc_id, statuses=("extracted", "failed"), timeout=60):
@@ -135,3 +137,62 @@ def test_a_failed_read_is_reported_on_the_document(client, sample_pdf, monkeypat
 def test_malformed_ids_are_rejected(client):
     assert client.get("/api/documents/../../etc").status_code == 404
     assert client.get("/api/documents/not-an-id").status_code == 422
+
+
+# ---- Vision step ----
+
+
+def test_extractors_lists_what_can_be_used(client):
+    data = client.get("/api/extractors").json()
+
+    assert data["default"] == "local"
+    by_id = {e["id"]: e for e in data["extractors"]}
+    assert by_id["local"]["available"] is True
+    assert by_id["none"]["available"] is True
+    assert by_id["aws"]["available"] is False
+    assert "AWS keys are not set" in by_id["aws"]["problem"]
+
+
+def test_upload_reads_figures_and_scanned_pages_with_the_local_model(client, sample_pdf):
+    doc = wait_for(client, upload(client, sample_pdf).json()["id"])
+
+    assert doc["extractor"] == "local"
+    assert doc["warning"] is None
+    assert [f["kind"] for f in doc["figures"]] == ["chart", "chart"]
+    assert all(f["described_by"] == "qwen2.5vl:3b" for f in doc["figures"])
+    page = client.get(f"/api/documents/{doc['id']}/pages/5").json()
+    assert page["text_source"] == "vision"
+
+
+def test_text_only_upload_skips_the_vision_step(client, sample_pdf, fake_ollama):
+    doc = wait_for(client, upload(client, sample_pdf, extractor="none").json()["id"])
+
+    assert doc["extractor"] == "none"
+    assert all(f["description"] is None for f in doc["figures"])
+    assert fake_ollama.calls_to("/api/chat") == []
+
+
+def test_upload_refuses_an_extractor_that_is_not_set_up(client, sample_pdf):
+    response = upload(client, sample_pdf, extractor="aws")
+
+    assert response.status_code == 400
+    assert "AWS keys are not set" in response.json()["detail"]
+    assert client.get("/api/documents").json() == []
+
+
+def test_upload_refuses_an_unknown_extractor(client, sample_pdf):
+    assert upload(client, sample_pdf, extractor="gpt").status_code == 422
+
+
+@pytest.mark.parametrize("fake_bedrock", [FakeBedrock(configured=True)])
+def test_vision_step_can_be_run_again_with_another_model(client, sample_pdf):
+    doc_id = upload(client, sample_pdf, extractor="local").json()["id"]
+    wait_for(client, doc_id)
+
+    response = client.post(f"/api/documents/{doc_id}/describe", params={"extractor": "aws"})
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "describing"
+    doc = wait_for(client, doc_id)
+    assert doc["extractor"] == "aws"
+    assert {f["described_by"] for f in doc["figures"]} == {"amazon.nova-lite-v1:0"}
