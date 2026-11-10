@@ -13,7 +13,7 @@ def upload(client, path, name=None, extractor=None):
         return client.post("/api/documents", files={"file": (name or path.name, f, "application/pdf")}, data=data)
 
 
-def wait_for(client, doc_id, statuses=("extracted", "failed"), timeout=60):
+def wait_for(client, doc_id, statuses=("ready", "extracted", "failed"), timeout=60):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         doc = client.get(f"/api/documents/{doc_id}").json()
@@ -38,7 +38,7 @@ def test_upload_is_read_in_the_background(client, sample_pdf):
     assert created["duplicate"] is False
 
     doc = wait_for(client, created["id"])
-    assert doc["status"] == "extracted"
+    assert doc["status"] == "ready"
     assert doc["progress"] == {"done": 5, "total": 5, "note": None}
 
     pages = {p["page_no"]: p for p in doc["pages"]}
@@ -196,3 +196,54 @@ def test_vision_step_can_be_run_again_with_another_model(client, sample_pdf):
     doc = wait_for(client, doc_id)
     assert doc["extractor"] == "aws"
     assert {f["described_by"] for f in doc["figures"]} == {"amazon.nova-lite-v1:0"}
+
+
+# ---- Search index ----
+
+
+def test_ready_document_reports_its_chunks(client, sample_pdf):
+    doc = wait_for(client, upload(client, sample_pdf, extractor="none").json()["id"])
+
+    assert doc["status"] == "ready"
+    assert doc["chunk_counts"]["table"] == 1
+    assert doc["chunk_counts"]["figure"] == 2
+    assert doc["chunk_counts"]["text"] >= 3
+    health = client.get("/api/health").json()
+    assert health["components"]["vectors"]["detail"] == f"{sum(doc['chunk_counts'].values())} chunks"
+
+
+def test_chunks_can_be_listed_and_filtered(client, sample_pdf):
+    doc_id = upload(client, sample_pdf, extractor="none").json()["id"]
+    wait_for(client, doc_id)
+
+    tables = client.get(f"/api/documents/{doc_id}/chunks", params={"kind": "table"}).json()
+    assert len(tables) == 1
+    assert tables[0]["page_no"] == 2
+    assert tables[0]["section"] == "Results by segment"
+    assert "|Retail|1,200|1,350|+12.5%|" in tables[0]["text"]
+
+    page3 = client.get(f"/api/documents/{doc_id}/chunks", params={"page_no": 3}).json()
+    figure = [c for c in page3 if c["kind"] == "figure"][0]
+    assert "Caption: Figure 1: Revenue by year (AED million)" in figure["text"]
+    assert client.get(figure["image_url"]).status_code == 200
+
+
+def test_index_can_be_rebuilt_without_duplicates(client, sample_pdf):
+    doc_id = upload(client, sample_pdf, extractor="none").json()["id"]
+    before = wait_for(client, doc_id)["chunk_counts"]
+
+    response = client.post(f"/api/documents/{doc_id}/index")
+
+    assert response.status_code == 202
+    assert wait_for(client, doc_id, statuses=("ready",))["chunk_counts"] == before
+    total = sum(before.values())
+    assert client.get("/api/health").json()["components"]["vectors"]["detail"] == f"{total} chunks"
+
+
+def test_delete_also_empties_the_search_index(client, sample_pdf):
+    doc_id = upload(client, sample_pdf, extractor="none").json()["id"]
+    wait_for(client, doc_id)
+
+    client.delete(f"/api/documents/{doc_id}")
+
+    assert client.get("/api/health").json()["components"]["vectors"]["detail"] == "0 chunks"

@@ -106,6 +106,35 @@ MIGRATIONS: list[str] = [
     ALTER TABLE pages ADD COLUMN read_error TEXT;
     ALTER TABLE documents ADD COLUMN warning TEXT;
     """,
+    # 4: chunks for search. The table from migration 1 was never filled, so it is
+    # rebuilt with an integer key that also serves as the row id of the keyword
+    # index (FTS5). Triggers keep that index in step, including when a document
+    # is deleted and its chunks go with it.
+    """
+    DROP TABLE chunks;
+    CREATE TABLE chunks (
+        seq             INTEGER PRIMARY KEY,
+        id              TEXT NOT NULL UNIQUE,
+        document_id     TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        position        INTEGER NOT NULL,
+        page_no         INTEGER NOT NULL,
+        kind            TEXT NOT NULL CHECK (kind IN ('text', 'table', 'figure')),
+        section         TEXT NOT NULL DEFAULT '',
+        text            TEXT NOT NULL,
+        figure_id       TEXT,
+        image_path      TEXT
+    );
+    CREATE INDEX chunks_by_document ON chunks(document_id, position);
+
+    CREATE VIRTUAL TABLE chunks_fts USING fts5(text, section, tokenize = 'porter unicode61');
+
+    CREATE TRIGGER chunks_after_insert AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunks_fts(rowid, text, section) VALUES (new.seq, new.text, new.section);
+    END;
+    CREATE TRIGGER chunks_after_delete AFTER DELETE ON chunks BEGIN
+        DELETE FROM chunks_fts WHERE rowid = old.seq;
+    END;
+    """,
 ]
 
 

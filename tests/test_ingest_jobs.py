@@ -29,7 +29,7 @@ def add_document(db, data_dir, status):
 
 async def test_unfinished_documents_are_resumed_on_start(db, tmp_path):
     stuck = add_document(db, tmp_path, documents.EXTRACTING)
-    done = add_document(db, tmp_path, documents.EXTRACTED)
+    done = add_document(db, tmp_path, documents.READY)
     queue = IngestQueue(db, tmp_path)
 
     queue.start()

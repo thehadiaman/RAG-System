@@ -106,3 +106,43 @@ def test_chunk_kind_must_be_known(db):
             "INSERT INTO chunks (id, document_id, position, page_no, kind, text) "
             "VALUES ('c1', 'doc1', 0, 1, 'video', 'x')"
         )
+
+
+def add_chunk(conn, chunk_id, text, section="Results", doc_id="doc1"):
+    conn.execute(
+        "INSERT INTO chunks (id, document_id, position, page_no, kind, section, text) VALUES (?, ?, 0, 1, 'text', ?, ?)",
+        (chunk_id, doc_id, section, text),
+    )
+
+
+def keyword_hits(conn, query):
+    rows = conn.execute(
+        "SELECT c.id FROM chunks_fts f JOIN chunks c ON c.seq = f.rowid WHERE chunks_fts MATCH ? ORDER BY c.id",
+        (query,),
+    ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def test_new_chunks_are_added_to_the_keyword_index(db):
+    with db.session() as conn:
+        add_document(conn)
+        add_chunk(conn, "c1", "Revenue grew 12.5% to $4.2B in 4Q'25")
+        add_chunk(conn, "c2", "Headcount fell slightly", section="People")
+
+        assert keyword_hits(conn, "revenues") == ["c1"]  # stemming: revenues ~ revenue
+        assert keyword_hits(conn, '"12.5"') == ["c1"]
+        assert keyword_hits(conn, "people") == ["c2"]  # section names are searchable too
+        assert keyword_hits(conn, "dividend") == []
+
+
+def test_deleting_a_document_also_clears_its_keywords(db):
+    with db.session() as conn:
+        add_document(conn)
+        add_chunk(conn, "c1", "Revenue grew")
+
+    with db.session() as conn:
+        conn.execute("DELETE FROM documents WHERE id = 'doc1'")
+
+    with db.session() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0] == 0
+        assert keyword_hits(conn, "revenue") == []

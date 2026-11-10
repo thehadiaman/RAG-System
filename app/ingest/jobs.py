@@ -1,10 +1,10 @@
 """Processes uploaded PDFs in the background, one document at a time.
 
-Steps: read the PDF (text, tables, figures), then let a vision model read the
-figures and scanned pages. One document at a time because reading is
-CPU-heavy and the local vision model needs the whole GPU. Documents left
-unfinished when the app stopped are picked up again on the next start, from
-the step they were in.
+Steps: read the PDF (text, tables, figures), let a vision model read the
+figures and scanned pages, then cut everything into chunks and index them for
+search. One document at a time because reading is CPU-heavy and the local
+vision model needs the whole GPU. Documents left unfinished when the app
+stopped are picked up again on the next start, from the step they were in.
 """
 
 from __future__ import annotations
@@ -16,11 +16,24 @@ import threading
 from pathlib import Path
 
 from app.ingest.describe import describe_document
+from app.ingest.index import index_document
 from app.ingest.pdf import PageResult, extract_document
 from app.ingest.vision import VisionService
+from app.llm.embedder import Embedder, EmbedderError
 from app.store import documents
 from app.store.db import Database
-from app.store.documents import DESCRIBING, EXTRACTED, EXTRACTING, FAILED, IN_PROGRESS, QUEUED, DocumentGone
+from app.store.documents import (
+    DESCRIBING,
+    EXTRACTED,
+    EXTRACTING,
+    FAILED,
+    INDEXING,
+    PENDING_ON_START,
+    QUEUED,
+    READY,
+    DocumentGone,
+)
+from app.store.vectors import VectorStore
 
 log = logging.getLogger(__name__)
 
@@ -41,19 +54,23 @@ class IngestQueue:
         preview_dpi: int = 100,
         figure_dpi: int = 200,
         vision: VisionService | None = None,
+        embedder: Embedder | None = None,
+        vectors: VectorStore | None = None,
     ) -> None:
         self.db = db
         self.data_dir = data_dir
         self.preview_dpi = preview_dpi
         self.figure_dpi = figure_dpi
         self.vision = vision
+        self.embedder = embedder
+        self.vectors = vectors
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._worker: asyncio.Task | None = None
         self._stopping = threading.Event()
 
     def start(self) -> None:
         self._worker = asyncio.create_task(self._run(), name="ingest-worker")
-        for doc_id in documents.ids_with_status(self.db, IN_PROGRESS):
+        for doc_id in documents.ids_with_status(self.db, PENDING_ON_START):
             log.info("Resuming document %s", doc_id)
             self.enqueue(doc_id)
 
@@ -87,12 +104,17 @@ class IngestQueue:
         if doc is None:
             return
         total = doc["page_count"] or 0
+        status = doc["status"]
+        warning = doc["warning"]
         try:
-            if doc["status"] in (QUEUED, EXTRACTING):
+            # Start from the step the document was in.
+            if status in (QUEUED, EXTRACTING):
                 await self._extract(doc_id, total)
-            warning = await self._describe(doc_id, doc["extractor"] or "none")
-            documents.set_status(self.db, doc_id, EXTRACTED, note=None, done=total, total=total, warning=warning)
-            log.info("Finished %s (%d pages)%s", doc_id, total, f" with a warning: {warning}" if warning else "")
+            if status in (QUEUED, EXTRACTING, DESCRIBING):
+                warning = await self._describe(doc_id, doc["extractor"] or "none")
+            final, warning = await self._index(doc_id, warning)
+            documents.set_status(self.db, doc_id, final, note=None, done=total, total=total, warning=warning)
+            log.info("Finished %s as %s (%d pages)%s", doc_id, final, total, f"; warning: {warning}" if warning else "")
         except _Stopping:
             log.info("Stopped while processing %s; it will resume on the next start", doc_id)
         except DocumentGone:
@@ -164,3 +186,28 @@ class IngestQueue:
         if outcome.interrupted:
             raise _Stopping
         return outcome.warning()
+
+    async def _index(self, doc_id: str, warning: str | None) -> tuple[str, str | None]:
+        """Runs the indexing step. Returns the document's final status and warning."""
+        if self.embedder is None or self.vectors is None:
+            return EXTRACTED, warning
+
+        def show(note: str, done: int = 0, total: int = 0) -> None:
+            if self._stopping.is_set():
+                raise _Stopping
+            documents.set_status(self.db, doc_id, INDEXING, note=note, done=done, total=total, warning=warning)
+
+        show("Preparing the search index")
+        try:
+            await index_document(
+                self.db,
+                self.vectors,
+                self.embedder,
+                doc_id,
+                lambda done, total: show(f"Indexing: {done} of {total} chunks", done, total),
+            )
+        except EmbedderError as exc:
+            # The text is safe; it just can't be searched until indexing is run again.
+            problem = f"Not searchable yet: {exc}"
+            return EXTRACTED, f"{warning} {problem}" if warning else problem
+        return READY, warning

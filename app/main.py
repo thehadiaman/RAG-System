@@ -65,6 +65,8 @@ async def lifespan(app: FastAPI):
         settings.page_preview_dpi,
         settings.figure_dpi,
         vision=app.state.vision,
+        embedder=app.state.embedder,
+        vectors=app.state.vectors,
     )
     app.state.ingest.start()
     yield

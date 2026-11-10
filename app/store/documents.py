@@ -15,9 +15,13 @@ from app.store.db import NOW, Database
 QUEUED = "queued"
 EXTRACTING = "extracting"  # reading text, tables and figures from the PDF
 DESCRIBING = "describing"  # the vision model reads figures and scanned pages
-EXTRACTED = "extracted"
+INDEXING = "indexing"  # chunks are cut, embedded and stored for search
+READY = "ready"  # searchable
+EXTRACTED = "extracted"  # read, but not searchable yet (indexing has not run or could not run)
 FAILED = "failed"
-IN_PROGRESS = (QUEUED, EXTRACTING, DESCRIBING)
+IN_PROGRESS = (QUEUED, EXTRACTING, DESCRIBING, INDEXING)
+# What the worker picks up when the app starts: unfinished work, plus documents still waiting to be indexed.
+PENDING_ON_START = (*IN_PROGRESS, EXTRACTED)
 
 
 class DocumentGone(Exception):
@@ -161,6 +165,15 @@ def pages(db: Database, doc_id: str) -> list[dict]:
                         WHERE f.document_id = p.document_id AND f.page_no = p.page_no) AS figure_count
                  FROM pages p WHERE p.document_id = ? ORDER BY p.page_no""",
             (doc_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def pages_text(db: Database, doc_id: str) -> list[dict]:
+    """Every page with its full text, in order (for chunking)."""
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT page_no, text, text_source FROM pages WHERE document_id = ? ORDER BY page_no", (doc_id,)
         ).fetchall()
     return [dict(row) for row in rows]
 

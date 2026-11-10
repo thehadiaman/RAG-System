@@ -3,7 +3,7 @@ import hashlib
 import shutil
 import sqlite3
 from pathlib import Path as FilePath
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Path, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.ingest.jobs import IngestQueue, document_dir
 from app.ingest.pdf import PdfError, check_pdf
 from app.ingest.vision import Extractor, VisionService
+from app.store import chunks as chunk_store
 from app.store import documents
 from app.store.db import Database
 from app.store.vectors import VectorStore
@@ -75,6 +76,18 @@ class FigureOut(BaseModel):
 class DocumentDetail(DocumentOut):
     pages: list[PageSummary]
     figures: list[FigureOut]
+    chunk_counts: dict[str, int]  # searchable pieces by kind: text, table, figure
+
+
+class ChunkOut(BaseModel):
+    id: str
+    position: int
+    page_no: int
+    kind: str
+    section: str
+    text: str
+    figure_id: str | None
+    image_url: str | None
 
 
 class PageDetail(BaseModel):
@@ -225,6 +238,26 @@ async def describe_again(
     return DocumentOut(**_document(documents.get(db, doc_id)))
 
 
+@router.post("/{doc_id}/index", status_code=202)
+async def index_again(
+    doc_id: DocId,
+    db: Database = Depends(get_db),
+    ingest: IngestQueue = Depends(get_ingest),
+) -> DocumentOut:
+    """Rebuild the document's search index, for example after the embedding model was unavailable."""
+    row = _get_or_404(db, doc_id)
+    if row["status"] in documents.IN_PROGRESS:
+        raise HTTPException(409, "This document is still being processed. Try again when it's done.")
+    if row["status"] == documents.FAILED:
+        raise HTTPException(409, "This document failed to process. Delete it and upload it again.")
+
+    documents.set_status(
+        db, doc_id, documents.INDEXING, note="Waiting to be indexed", done=0, total=0, warning=row["warning"]
+    )
+    ingest.enqueue(doc_id)
+    return DocumentOut(**_document(documents.get(db, doc_id)))
+
+
 @router.get("")
 async def list_documents(db: Database = Depends(get_db)) -> list[DocumentOut]:
     return [DocumentOut(**_document(row)) for row in documents.list_all(db)]
@@ -237,7 +270,30 @@ async def get_document(doc_id: DocId, db: Database = Depends(get_db)) -> Documen
         PageSummary(**{**page, "needs_ocr": bool(page["needs_ocr"])}, image_url=_page_url(doc_id, page["page_no"]))
         for page in documents.pages(db, doc_id)
     ]
-    return DocumentDetail(**_document(row), pages=pages, figures=[_figure(f) for f in documents.figures(db, doc_id)])
+    return DocumentDetail(
+        **_document(row),
+        pages=pages,
+        figures=[_figure(f) for f in documents.figures(db, doc_id)],
+        chunk_counts=chunk_store.counts(db, doc_id),
+    )
+
+
+@router.get("/{doc_id}/chunks")
+async def get_chunks(
+    doc_id: DocId,
+    page_no: int | None = None,
+    kind: Literal["text", "table", "figure"] | None = None,
+    db: Database = Depends(get_db),
+) -> list[ChunkOut]:
+    """The searchable pieces a document was cut into, optionally for one page or one kind."""
+    _get_or_404(db, doc_id)
+    return [
+        ChunkOut(
+            **{key: row[key] for key in ("id", "position", "page_no", "kind", "section", "text", "figure_id")},
+            image_url=f"/api/documents/{doc_id}/figures/{row['figure_id']}/image" if row["figure_id"] else None,
+        )
+        for row in chunk_store.for_document(db, doc_id, page_no, kind)
+    ]
 
 
 @router.get("/{doc_id}/pages/{page_no}")
