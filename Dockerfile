@@ -29,8 +29,14 @@ CMD ["python", "-m", "app"]
 FROM runtime AS test
 
 USER root
+# A headless Chromium for the browser tests of the web UI. Only this image has it.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY requirements-dev.txt .
-RUN pip install -r requirements-dev.txt
+RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+    && pip install -r requirements-dev.txt \
+    && playwright install --with-deps --only-shell chromium \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod -R a+rX /ms-playwright
 COPY pytest.ini .
 COPY tests ./tests
 

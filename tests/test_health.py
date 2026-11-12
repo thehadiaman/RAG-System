@@ -43,3 +43,14 @@ def test_unknown_api_route_is_404(client):
 def test_startup_creates_the_database_and_vector_store(client, data_dir):
     assert (data_dir / "app.db").is_file()
     assert (data_dir / "chroma").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("path", "content_type"),
+    [("/js/app.js", "text/javascript"), ("/css/app.css", "text/css"), ("/js/details.js", "text/javascript")],
+)
+def test_web_ui_files_are_served(client, path, content_type):
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(content_type)
