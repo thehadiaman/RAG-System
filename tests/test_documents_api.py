@@ -247,3 +247,50 @@ def test_delete_also_empties_the_search_index(client, sample_pdf):
     client.delete(f"/api/documents/{doc_id}")
 
     assert client.get("/api/health").json()["components"]["vectors"]["detail"] == "0 chunks"
+
+
+# ---- Search ----
+
+
+def test_search_finds_the_table_with_links_to_the_page(client, sample_pdf):
+    doc_id = upload(client, sample_pdf, extractor="none").json()["id"]
+    wait_for(client, doc_id)
+
+    response = client.post("/api/search", json={"question": "Wholesale results by segment"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "hybrid"
+    assert data["keywords"] == ["Wholesale", "results", "segment"]
+    top = data["hits"][0]
+    assert top["kind"] == "table"
+    assert top["page_no"] == 2
+    assert top["filename"] == "annual-report.pdf"
+    assert "keyword" in top["found_by"]
+    assert client.get(top["page_image_url"]).status_code == 200
+
+
+def test_search_returns_figure_image_links(client, sample_pdf):
+    doc_id = upload(client, sample_pdf, extractor="none").json()["id"]
+    wait_for(client, doc_id)
+
+    hits = client.post("/api/search", json={"question": "Revenue by year AED million", "limit": 30}).json()["hits"]
+
+    figure = [h for h in hits if h["kind"] == "figure" and h["page_no"] == 3][0]
+    assert client.get(figure["figure_image_url"]).status_code == 200
+
+
+def test_search_checks_its_input(client, sample_pdf):
+    assert client.post("/api/search", json={"question": "   "}).status_code == 422
+    assert client.post("/api/search", json={"question": "x", "limit": 0}).status_code == 422
+    assert client.post("/api/search", json={"question": "x", "document_ids": ["../x"]}).status_code == 422
+
+    response = client.post("/api/search", json={"question": "x", "document_ids": ["0" * 32]})
+    assert response.status_code == 404
+    assert "Unknown document" in response.json()["detail"]
+
+
+def test_search_with_nothing_indexed_returns_no_hits(client):
+    data = client.post("/api/search", json={"question": "revenue"}).json()
+
+    assert data["hits"] == []

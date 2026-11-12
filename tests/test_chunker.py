@@ -213,6 +213,14 @@ def test_picture_text_is_dropped_only_when_the_page_figures_are_described():
     assert [c.kind for c in undescribed] == ["text", "figure"]
 
 
+def test_embedding_text_leaves_out_the_unread_figure_placeholder():
+    chunk = figure_chunk(figure(caption="Figure 2: Margin by year", text_inside="2023 24% 2024 28%"), "Margins")
+
+    assert embedding_text("report.pdf", chunk) == (
+        "report › Margins\nCaption: Figure 2: Margin by year\n\nText in the figure (from the PDF): 2023 24% 2024 28%"
+    )
+
+
 def test_embedding_text_says_where_the_chunk_is_from():
     chunk = Chunk(1, "text", "Revenue", "Up 12%.")
 

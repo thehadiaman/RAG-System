@@ -5,6 +5,7 @@ from app.ingest.vision import VisionService
 from app.llm.bedrock import BedrockClient
 from app.llm.embedder import Embedder
 from app.llm.ollama import OllamaClient
+from app.search import Searcher
 from app.store.db import Database
 from app.store.vectors import VectorStore
 
@@ -35,3 +36,7 @@ def get_ingest(request: Request) -> IngestQueue:
 
 def get_vision(request: Request) -> VisionService:
     return request.app.state.vision
+
+
+def get_searcher(request: Request) -> Searcher:
+    return request.app.state.searcher

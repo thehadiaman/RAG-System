@@ -5,13 +5,14 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import aws, documents, extractors, health, models
+from app.api import aws, documents, extractors, health, models, search
 from app.config import Settings, get_settings
 from app.ingest.jobs import IngestQueue
 from app.ingest.vision import VisionService
 from app.llm.bedrock import BedrockClient
 from app.llm.embedder import Embedder
 from app.llm.ollama import OllamaClient
+from app.search import Searcher
 from app.store.db import Database
 from app.store.vectors import VectorStore
 
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI):
     app.state.ollama = make_ollama(settings)
     app.state.embedder = Embedder(app.state.ollama, settings.ollama_embed_model, settings.embed_batch_size)
     app.state.bedrock = make_bedrock(settings)
+    app.state.searcher = Searcher(app.state.db, app.state.vectors, app.state.embedder)
     app.state.vision = VisionService(
         app.state.ollama,
         app.state.bedrock,
@@ -81,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(aws.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
     app.include_router(extractors.router, prefix="/api")
+    app.include_router(search.router, prefix="/api")
 
     # The web UI is plain static files served by this same server.
     # Mounted last so every /api route takes priority.

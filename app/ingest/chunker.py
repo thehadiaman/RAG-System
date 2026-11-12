@@ -23,6 +23,7 @@ MAX_TEXT_CHARS = 1600
 OVERLAP_CHARS = 200
 MAX_TABLE_CHARS = 2400
 MIN_FIGURE_TEXT_CHARS = 20  # a figure with less text than this and no description says nothing
+UNREAD_FIGURE = "Figure (not read by a vision model)."
 
 HEADING = re.compile(r"^#{1,6}\s+(.*)$")
 PICTURE_TEXT = re.compile(r"^\[Picture text: .*\]$")
@@ -267,7 +268,7 @@ def figure_chunk(figure: dict, section: str) -> Chunk | None:
     if not description and len(caption) + len(inside) < MIN_FIGURE_TEXT_CHARS:
         return None
 
-    parts = [description or "Figure (not read by a vision model)."]
+    parts = [description or UNREAD_FIGURE]
     if caption:
         parts.append(f"Caption: {caption}")
     if inside:
@@ -291,4 +292,6 @@ def embedding_text(filename: str, chunk: Chunk) -> str:
     """The chunk with a short header saying where it is from, so it stands on its own."""
     title = filename.rsplit(".", 1)[0]
     header = f"{title} › {chunk.section}" if chunk.section else title
-    return f"{header}\n{chunk.text}"[:MAX_EMBED_CHARS]
+    # The same placeholder on every unread figure would pull their vectors together.
+    text = chunk.text.removeprefix(UNREAD_FIGURE).lstrip()
+    return f"{header}\n{text}"[:MAX_EMBED_CHARS]
