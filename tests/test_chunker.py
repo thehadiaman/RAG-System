@@ -89,6 +89,12 @@ def test_one_huge_paragraph_is_cut_at_sentence_ends():
     assert all(c.text.endswith(".") for c in chunks)
 
 
+def test_section_names_are_plain_text():
+    chunks, _ = chunk_page(1, "## **Backlog**<sup>**1**</sup>\n\nUp 5.6%.\n\n# FCF* conversion<sup>-a)</sup>\n\nOver 100%.", "")
+
+    assert [c.section for c in chunks] == ["Backlog", "FCF* conversion"]
+
+
 def test_section_carries_over_from_the_previous_page():
     chunks, section = chunk_page(2, "Continued text without a heading.", "Risk factors")
 
@@ -188,6 +194,14 @@ def test_document_chunks_come_in_page_order_with_figures_after_page_text():
         (2, "text", "Revenue trend"),
         (2, "figure", "Revenue trend"),
     ]
+
+
+def test_figure_section_is_plain_text_too():
+    chunks = chunk_document(
+        [page(1, "# **Backlog**<sup>1</sup>\n\nSee chart.")], [figure(1, kind="chart", description="Type: chart")]
+    )
+
+    assert [c.section for c in chunks] == ["Backlog", "Backlog"]
 
 
 def test_picture_text_is_dropped_only_when_the_page_figures_are_described():

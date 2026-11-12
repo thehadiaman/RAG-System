@@ -27,6 +27,8 @@ MIN_FIGURE_TEXT_CHARS = 20  # a figure with less text than this and no descripti
 HEADING = re.compile(r"^#{1,6}\s+(.*)$")
 PICTURE_TEXT = re.compile(r"^\[Picture text: .*\]$")
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+FOOTNOTE_MARK = re.compile(r"<sup>.*?</sup>")
+HTML_TAG = re.compile(r"<[^>]+>")
 
 
 @dataclass
@@ -59,7 +61,7 @@ def chunk_document(pages: list[dict], figures: list[dict]) -> list[Chunk]:
     for page in pages:
         page_figures = figures_by_page.get(page["page_no"], [])
         figure_chunks = []
-        figure_section = page_heading(page["text"]) or section
+        figure_section = clean_heading(page_heading(page["text"])) or section
         for figure in page_figures:
             chunk = figure_chunk(figure, figure_section)
             if chunk:
@@ -182,8 +184,11 @@ def chunk_page(
 
 
 def clean_heading(line: str) -> str:
+    """A heading as plain text: no #, bold marks or footnote markers like <sup>1</sup>."""
     match = HEADING.match(line)
     text = match.group(1) if match else line
+    text = FOOTNOTE_MARK.sub("", text)
+    text = HTML_TAG.sub("", text)
     return text.replace("**", "").strip()[:200]
 
 
