@@ -57,7 +57,7 @@ def test_question_is_answered_with_clickable_citations(ready):
     expect(panel).to_be_visible()
     expect(panel.locator("h2")).to_have_text("Source 1")
     expect(panel.locator(".source-where")).to_contain_text("annual-report.pdf · page")
-    expect(panel.locator(".passage")).not_to_be_empty()
+    expect(panel.locator("pre.passage")).not_to_be_empty()
     expect(panel).not_to_contain_text("null")
     shot(page, "08-source-panel")
 
@@ -67,6 +67,18 @@ def test_question_is_answered_with_clickable_citations(ready):
     expect(page.locator("dialog#details")).to_be_hidden()
     page.keyboard.press("Escape")
     expect(panel).to_be_hidden()
+
+
+def test_source_panel_shows_the_text_exactly_as_the_model_read_it(ready, fake_ollama):
+    page = ready
+    ask(page, "How did the retail segment do?")
+    answer = wait_for_answer(page)
+
+    answer.locator(".answer button.cite").first.click()
+
+    passage = page.locator("#source-panel pre.passage").inner_text()
+    source = page.request.get(page.url.replace("/#chat=", "/api/chats/")).json()["messages"][1]["sources"][0]
+    assert passage == source["text"]
 
 
 def test_follow_up_shows_what_was_searched(ready):
