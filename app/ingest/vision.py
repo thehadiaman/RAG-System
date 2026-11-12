@@ -64,6 +64,13 @@ Write only the transcription, nothing else."""
 
 TYPE_LINE = re.compile(r"^\W*type\W*:\W*([a-z]+)", re.I | re.M)
 CODE_FENCE = re.compile(r"^```[a-z]*\n(.*?)\n```$", re.S)
+TABLE_SEPARATOR_LINE = re.compile(r"^\|?[\s:|-]+\|?$")
+
+# A small model can get stuck repeating table rows until it runs out of room
+# (seen on a real chart: 19,000 characters over 9 minutes). The token limit
+# bounds the time; the clean-up removes the repetition that got through.
+MAX_DESCRIPTION_TOKENS = 1500
+MAX_DESCRIPTION_CHARS = 6000
 
 
 class VisionError(Exception):
@@ -84,9 +91,29 @@ def scanned_page_prompt(page_no: int) -> str:
 
 
 def clean_reply(text: str) -> str:
+    """The model's reply without a code fence around it, repeated lines, or runaway length."""
     text = text.strip()
     match = CODE_FENCE.match(text)
-    return match.group(1).strip() if match else text
+    if match:
+        text = match.group(1).strip()
+    text = drop_repeated_lines(text)
+    if len(text) > MAX_DESCRIPTION_CHARS:
+        text = text[:MAX_DESCRIPTION_CHARS].rsplit("\n", 1)[0] + "\n(cut short: the description was too long)"
+    return text
+
+
+def drop_repeated_lines(text: str) -> str:
+    """Keep the first copy of each line. Blank lines and table separators may repeat."""
+    seen: set[str] = set()
+    kept = []
+    for line in text.splitlines():
+        key = " ".join(line.split())
+        if key and not TABLE_SEPARATOR_LINE.match(key):
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def figure_kind(description: str) -> str:
@@ -133,7 +160,7 @@ class LocalDescriber:
 
     @property
     def _options(self) -> dict:
-        return {"num_ctx": self.num_ctx, "temperature": 0}
+        return {"num_ctx": self.num_ctx, "temperature": 0, "num_predict": MAX_DESCRIPTION_TOKENS}
 
     async def prepare(self) -> None:
         try:
@@ -159,7 +186,7 @@ class LocalDescriber:
 class AwsDescriber:
     bedrock: BedrockClient
     concurrency: int = 4
-    max_tokens: int = 2000
+    max_tokens: int = MAX_DESCRIPTION_TOKENS
 
     @property
     def label(self) -> str:

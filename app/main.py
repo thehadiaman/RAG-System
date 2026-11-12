@@ -1,7 +1,10 @@
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
@@ -14,10 +17,13 @@ from app.llm.bedrock import BedrockClient
 from app.llm.embedder import Embedder
 from app.llm.ollama import OllamaClient
 from app.search import Searcher
+from app.store import documents as document_store
 from app.store.db import Database
 from app.store.vectors import VectorStore
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+log = logging.getLogger("app")
 
 
 def make_ollama(settings: Settings) -> OllamaClient:
@@ -83,13 +89,47 @@ async def lifespan(app: FastAPI):
         vectors=app.state.vectors,
     )
     app.state.ingest.start()
+    # Logged in the background, so a slow Ollama can't hold up startup.
+    summary = asyncio.create_task(log_startup_summary(app, settings), name="startup-summary")
     yield
+    summary.cancel()
+    with suppress(asyncio.CancelledError):
+        await summary
     await app.state.ingest.stop()
     await app.state.ollama.aclose()
 
 
+async def log_startup_summary(app: FastAPI, settings: Settings) -> None:
+    """A few lines in the log saying what is ready, and what to fix if something isn't."""
+    try:
+        state = app.state
+        documents = len(await asyncio.to_thread(document_store.list_all, state.db))
+        chunks = await asyncio.to_thread(state.vectors.count)
+        log.info("PDF RAG %s on http://%s:%s", __version__, settings.app_host, settings.app_port)
+        log.info("Data in %s: schema v%d, %d documents, %d search chunks",
+                 settings.data_dir, state.db.ping(), documents, chunks)
+        problem = await state.embedder.problem()
+        log.info("Embedding model %s: %s", settings.ollama_embed_model, problem or "ready")
+        for extractor in ("local", "aws"):
+            problem = await state.vision.problem(extractor)
+            log.info("Charts read by %s: %s", state.vision.label(extractor), problem or "ready")
+        problem = state.bedrock.qwen_problem()
+        log.info("Qwen2.5-VL on AWS for answers: %s", problem or "ready")
+    except Exception:  # noqa: BLE001 - a summary must never take the app down
+        log.exception("Couldn't write the startup summary")
+
+
+async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    log.exception("Unexpected error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Something went wrong on the server. Details are in the app log: docker compose logs app"},
+    )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="PDF RAG", version=__version__, lifespan=lifespan)
+    app.add_exception_handler(Exception, unexpected_error)
     app.include_router(health.router, prefix="/api")
     app.include_router(models.router, prefix="/api")
     app.include_router(aws.router, prefix="/api")

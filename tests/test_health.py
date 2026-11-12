@@ -54,3 +54,35 @@ def test_web_ui_files_are_served(client, path, content_type):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(content_type)
+
+
+def test_unexpected_errors_return_a_clear_message(make_app, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    def broken(db):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr("app.store.documents.list_all", broken)
+    with TestClient(make_app(), raise_server_exceptions=False) as test_client:
+        response = test_client.get("/api/documents")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Something went wrong on the server. Details are in the app log: docker compose logs app"
+    }
+
+
+def test_startup_logs_what_is_ready(make_app, caplog):
+    import time
+
+    from fastapi.testclient import TestClient
+
+    caplog.set_level("INFO", logger="app")
+    with TestClient(make_app()):
+        deadline = time.monotonic() + 10
+        while "Qwen2.5-VL on AWS" not in caplog.text and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    assert "Embedding model nomic-embed-text: ready" in caplog.text
+    assert "Charts read by Qwen2.5-VL on this computer (qwen2.5vl:3b): ready" in caplog.text
+    assert "Charts read by Amazon Nova Lite (AWS): AWS keys are not set" in caplog.text
