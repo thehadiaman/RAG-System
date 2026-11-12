@@ -226,3 +226,40 @@ def test_chat_can_be_limited_to_some_documents(ready):
     chat_id = page.url.split("#chat=")[1]
     chat = page.request.get(f"/api/chats/{chat_id}").json()
     assert len(chat["document_ids"]) == 1
+
+
+def test_numbers_missing_from_the_sources_are_flagged(ready, fake_ollama):
+    page = ready
+    fake_ollama.chat_reply = lambda body: (
+        "Retail revenue was 1,350 in 2025 [1][2][3]. Margin was 99.9% [1][2][3]."
+        if body["messages"][-1]["content"].startswith("Sources:")
+        else "x"
+    )
+
+    ask(page, "Retail and wholesale results by segment")
+
+    answer = wait_for_answer(page)
+    flag = answer.locator("mark.num-flag")
+    expect(flag).to_have_count(1)
+    expect(flag).to_have_text("99.9%")
+    expect(flag).to_have_attribute("title", "Check this number: not in any source the model read.")
+    expect(answer.locator(".check-warn")).to_contain_text("1 number couldn't be matched to the cited sources")
+    shot(page, "11-number-check")
+
+    page.reload()  # the check is saved with the answer
+    expect(last_answer(page).locator("mark.num-flag")).to_have_text("99.9%")
+
+
+def test_answer_whose_numbers_all_match_says_so(ready, fake_ollama):
+    page = ready
+    fake_ollama.chat_reply = lambda body: (
+        "Retail revenue was 1,350 in 2025 [1][2][3]."
+        if body["messages"][-1]["content"].startswith("Sources:")
+        else "x"
+    )
+
+    ask(page, "Retail and wholesale results by segment")
+
+    answer = wait_for_answer(page)
+    expect(answer.locator(".check-ok")).to_have_text("✓ The number in this answer was found in the cited sources.")
+    expect(answer.locator("mark.num-flag")).to_have_count(0)

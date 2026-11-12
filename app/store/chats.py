@@ -37,7 +37,7 @@ def _chat(row) -> dict:
 
 def _message(row) -> dict:
     message = dict(row)
-    for key in ("sources", "cited"):
+    for key in ("sources", "cited", "number_check"):
         message[key] = json.loads(message[key]) if message[key] else None
     return message
 
@@ -110,14 +110,16 @@ def add_message(
     seconds: float | None = None,
     status: str = COMPLETE,
     error: str | None = None,
+    number_check: dict | None = None,
 ) -> int:
     with db.session() as conn:
         if not conn.execute("SELECT 1 FROM chats WHERE id = ?", (chat_id,)).fetchone():
             raise ChatGone(chat_id)
         cursor = conn.execute(
             """INSERT INTO messages
-                   (chat_id, role, content, model_id, sources, cited, search_query, seconds, status, error)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (chat_id, role, content, model_id, sources, cited, search_query, seconds, status, error,
+                    number_check)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 chat_id,
                 role,
@@ -129,6 +131,7 @@ def add_message(
                 seconds,
                 status,
                 error,
+                json.dumps(number_check) if number_check is not None else None,
             ),
         )
         conn.execute(f"UPDATE chats SET updated_at = {NOW} WHERE id = ?", (chat_id,))

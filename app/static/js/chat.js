@@ -6,6 +6,35 @@ import { readEvents } from "./sse.js";
 
 const NEW_TITLE = "New chat";
 
+function sourceList(numbers) {
+  return numbers.length === 1 ? `source ${numbers[0]}` : `sources ${numbers.join(", ")}`;
+}
+
+// Why a number was flagged, in plain words.
+function flagReason(check) {
+  if (check.status === "not_found") return "not in any source the model read";
+  return `not in ${sourceList(check.cited)}, but in ${sourceList(check.found_in)}`;
+}
+
+// Highlight the first place each flagged number appears in the rendered answer.
+function markNumbers(root, flagged) {
+  for (const check of flagged) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        node.parentElement?.closest(".cite, code, pre, mark") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    });
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const at = node.nodeValue.indexOf(check.text);
+      if (at < 0) continue;
+      const rest = node.splitText(at);
+      rest.splitText(check.text.length);
+      rest.replaceWith(h("mark", { class: "num-flag", title: `Check this number: ${flagReason(check)}.` }, check.text));
+      break;
+    }
+  }
+}
+
 function modelName(id) {
   if (!id) return null;
   if (id === "aws:qwen2.5-vl") return "Qwen2.5-VL (AWS)";
@@ -178,6 +207,7 @@ export class ChatView {
     view.render();
     // search_query equals the question for first questions, so this only shows for rewritten follow-ups.
     view.showSearchedFor(message.search_query, this.previousQuestion());
+    view.numberCheck(message.number_check);
     view.addSources(message.cited || []);
     if (message.status === "stopped") view.note("Stopped. This is what was written before you pressed Stop.", "warn");
     if (message.status === "error") view.note(`The answer failed: ${message.error}`, "bad");
@@ -238,6 +268,7 @@ export class ChatView {
           end();
           view.text = data.answer;
           view.render();
+          view.numberCheck(data.number_check);
           view.addSources(data.cited);
           view.meta(data.model || model, data.seconds);
         } else if (event === "error") {
@@ -295,6 +326,18 @@ export class ChatView {
         }
       },
       note: (text, kind) => root.append(h("p", { class: `msg-note note-${kind}` }, text)),
+      numberCheck: (check) => {
+        if (!check || !check.summary.checked) return;
+        const flagged = check.numbers.filter((n) => n.status !== "ok");
+        markNumbers(body, flagged);
+        const note = flagged.length
+          ? h("div", { class: "check check-warn", role: "note" },
+              h("p", {}, `${plural(flagged.length, "number")} couldn't be matched to the cited sources. Check before relying on ${flagged.length === 1 ? "it" : "them"}:`),
+              h("ul", {}, flagged.map((n) => h("li", {}, h("strong", {}, n.text), ": ", flagReason(n)))),
+            )
+          : h("p", { class: "check check-ok" }, `✓ ${check.summary.checked === 1 ? "The number in this answer was" : `All ${check.summary.checked} numbers in this answer were`} found in the cited sources.`);
+        body.after(note);
+      },
       addSources: (cited) => {
         if (!view.sources.length) return;
         const card = (source) =>

@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.checks import check_numbers
 from app.ingest.pdf import image_for_vision
 from app.llm.bedrock import QWEN_LABEL, BedrockClient, BedrockError
 from app.llm.messages import ChatMessage, ImageInput
@@ -337,6 +338,8 @@ class Answerer:
         return {
             "answer": answer,
             "cited": cited_numbers(answer, len(sources)),
+            # Each number in the answer, looked up in the text each source gave the model.
+            "number_check": check_numbers(answer, {s.number: s.text for s in sources}),
             "model": model.id,
             "seconds": round(time.perf_counter() - started, 2),
             "first_token_seconds": round(first_token, 2) if first_token is not None else None,

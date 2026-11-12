@@ -381,3 +381,15 @@ async def test_aws_qwen_rewrites_follow_ups_too(tmp_path):
 
     assert next(d for t, d in events if t == "sources")["search_query"] == "What was Wholesale revenue in 2025?"
     assert [call[0] for call in bedrock.calls] == ["qwen", "qwen_stream"]
+
+
+@pytest.mark.anyio
+async def test_finished_answer_comes_with_its_number_check(tmp_path):
+    hits = [chunk(1, text="Retail revenue was 1,350 in 2025."), chunk(2, text="Online grew 25.0%.")]
+
+    events = await run(answerer(tmp_path, hits), "How did retail do?", "ollama:llama3.2:3b")
+
+    check = events[-1][1]["number_check"]
+    # The fake answer says "1,350 [1]" (right) and "online grew 30.0% [1][2]" (in no source).
+    assert check["summary"] == {"checked": 2, "ok": 1, "other_source": 0, "not_found": 1}
+    assert [(n["text"], n["status"]) for n in check["numbers"]] == [("1,350", "ok"), ("30.0%", "not_found")]

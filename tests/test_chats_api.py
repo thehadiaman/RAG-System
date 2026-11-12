@@ -209,3 +209,13 @@ def test_answer_stopped_part_way_is_saved_as_stopped(client, ready_doc):
     assert answer["status"] == "stopped"
     assert answer["content"] == ANSWER_REPLY.split(" ")[0] + " "
     assert answer["sources"]
+
+
+def test_number_check_is_saved_with_the_answer(client, ready_doc):
+    chat = new_chat(client)
+
+    done = ask(client, chat["id"], "How did retail do?")[-1][1]
+
+    answer = client.get(f"/api/chats/{chat['id']}").json()["messages"][1]
+    assert answer["number_check"] == done["number_check"]
+    assert answer["number_check"]["summary"]["checked"] == 2

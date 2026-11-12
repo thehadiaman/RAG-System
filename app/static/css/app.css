@@ -642,3 +642,23 @@ button.cite:hover { background: var(--accent); color: var(--accent-text); }
   .chat-actions { opacity: 1; }
   .doc-filter-body { width: min(300px, calc(100vw - 48px)); }
 }
+
+/* ---- Number check ---- */
+
+.num-flag {
+  background: var(--warn-soft);
+  color: inherit;
+  border-bottom: 2px dotted var(--warn);
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: help;
+}
+.check { font-size: 13px; }
+.check-ok { color: var(--muted); }
+.check-warn {
+  background: var(--warn-soft);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.check-warn ul { margin: 4px 0 0; padding-left: 18px; }

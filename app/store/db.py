@@ -145,6 +145,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'complete';  -- complete, stopped or error
     ALTER TABLE messages ADD COLUMN error TEXT;
     """,
+    # 6: the number check of each answer (see app/checks.py)
+    """
+    ALTER TABLE messages ADD COLUMN number_check TEXT;  -- JSON
+    """,
 ]
 
 

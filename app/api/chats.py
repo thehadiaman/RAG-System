@@ -60,6 +60,7 @@ class MessageOut(BaseModel):
     seconds: float | None
     status: str  # complete, stopped or error
     error: str | None
+    number_check: dict | None  # numbers in the answer, looked up in its sources (complete answers only)
     created_at: str
 
 
@@ -78,7 +79,10 @@ def _message_out(message: dict) -> MessageOut:
     return MessageOut(
         **{
             key: message[key]
-            for key in ("id", "role", "content", "sources", "cited", "search_query", "seconds", "status", "error")
+            for key in (
+                "id", "role", "content", "sources", "cited", "search_query", "seconds", "status", "error",
+                "number_check",
+            )
         },
         model=message["model_id"],
         created_at=message["created_at"],
@@ -179,7 +183,14 @@ async def answer_and_save(
     pieces: list[str] = []
     saved = False
 
-    def save(status: str, content: str, cited: list[int], seconds: float, error: str | None = None) -> int | None:
+    def save(
+        status: str,
+        content: str,
+        cited: list[int],
+        seconds: float,
+        error: str | None = None,
+        number_check: dict | None = None,
+    ) -> int | None:
         nonlocal saved
         saved = True
         try:
@@ -195,6 +206,7 @@ async def answer_and_save(
                 seconds=round(seconds, 2),
                 status=status,
                 error=error,
+                number_check=number_check,
             )
         except ChatGone:
             return None
@@ -208,7 +220,9 @@ async def answer_and_save(
                 pieces.append(event.data["text"])
             elif event.type == "done":
                 data = event.data
-                message_id = save(COMPLETE, data["answer"], data["cited"], data["seconds"])
+                message_id = save(
+                    COMPLETE, data["answer"], data["cited"], data["seconds"], number_check=data["number_check"]
+                )
                 event = Event("done", {**data, "message_id": message_id})
             elif event.type == "error":
                 partial = event.data["partial_answer"]
