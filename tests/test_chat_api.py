@@ -8,17 +8,21 @@ from tests.pdf_factory import build_sample_pdf
 from tests.test_documents_api import upload, wait_for
 
 
-def ask(client, **body):
-    """POST /api/chat and return the Server-Sent Events as (event, data) pairs."""
-    with client.stream("POST", "/api/chat", json=body) as response:
-        assert response.status_code == 200, response.read()
-        assert response.headers["content-type"].startswith("text/event-stream")
-        text = "".join(response.iter_text())
+def parse_events(text: str) -> list[tuple[str, dict]]:
+    """Server-Sent Events text as (event, data) pairs."""
     events = []
     for block in text.strip().split("\n\n"):
         fields = dict(line.split(": ", 1) for line in block.splitlines())
         events.append((fields["event"], json.loads(fields["data"])))
     return events
+
+
+def ask(client, **body):
+    """POST /api/chat and return the Server-Sent Events as (event, data) pairs."""
+    with client.stream("POST", "/api/chat", json=body) as response:
+        assert response.status_code == 200, response.read()
+        assert response.headers["content-type"].startswith("text/event-stream")
+        return parse_events("".join(response.iter_text()))
 
 
 @pytest.fixture

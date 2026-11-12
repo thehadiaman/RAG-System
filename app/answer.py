@@ -1,10 +1,12 @@
 """Answers a question from the user's documents, with numbered citations.
 
-1. Search picks the best chunks; they become numbered sources, trimmed to fit.
-2. If the chosen model can read images, the images of the top chart sources go
+1. A follow-up question ("and in 2023?") is first rewritten into a complete
+   question using the recent conversation, so search knows what it is about.
+2. Search picks the best chunks; they become numbered sources, trimmed to fit.
+3. If the chosen model can read images, the images of the top chart sources go
    along too, so the model can check numbers itself.
-3. The model is told to answer only from the sources and cite them like [2].
-4. The answer streams back as events: sources first, then text, then which
+4. The model is told to answer only from the sources and cite them like [2].
+5. The answer streams back as events: sources first, then text, then which
    sources were cited.
 """
 
@@ -29,6 +31,9 @@ log = logging.getLogger(__name__)
 AWS_QWEN_ID = "aws:qwen2.5-vl"
 MAX_CHARS_PER_SOURCE = 3000
 IMAGE_MEGAPIXELS = 1.0
+HISTORY_TURNS = 2  # earlier question-and-answer pairs the model sees
+HISTORY_ANSWER_CHARS = 500  # each earlier answer is cut to this length
+MAX_REWRITE_CHARS = 400
 NOT_FOUND = "I couldn't find this in your documents."
 NOTHING_INDEXED = (
     "I couldn't find anything in your documents to answer this. Upload a PDF, or wait until it is ready."
@@ -44,7 +49,17 @@ Rules:
 - Start with the direct answer, then add short supporting details. Keep it brief.
 - Answer in the same language as the question."""
 
+REWRITE_SYSTEM_PROMPT = "You rewrite follow-up questions so they can be understood without the conversation."
+
+REWRITE_PROMPT = """Conversation so far:
+{history}
+
+Follow-up question: {question}
+
+Rewrite the follow-up as one complete question that can be understood on its own. Keep every company, metric, segment and period it refers to. If it is already complete, repeat it unchanged. Reply with the question only."""
+
 CITATION = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
+REWRITE_LABEL = re.compile(r"^(standalone|rewritten|complete)?\s*(question)?\s*:\s*", re.I)
 
 
 class AnswerError(Exception):
@@ -59,6 +74,14 @@ class ModelChoice:
     vision: bool
 
 
+@dataclass(frozen=True)
+class Turn:
+    """An earlier question (in its complete form) and its answer."""
+
+    question: str
+    answer: str
+
+
 @dataclass
 class Source:
     number: int
@@ -71,15 +94,6 @@ class Source:
         chunk = self.hit
         where = f"{chunk['filename']}, page {chunk['page_no']}, {chunk['kind']}"
         return f"{where}, section: {chunk['section']}" if chunk["section"] else where
-
-
-@dataclass
-class Prepared:
-    question: str
-    model: ModelChoice
-    sources: list[Source]
-    search_mode: str
-    notice: str | None = None
 
 
 @dataclass
@@ -108,7 +122,22 @@ def select_sources(hits: list[dict], max_sources: int, max_chars: int) -> list[S
     return sources
 
 
-def build_prompt(question: str, sources: list[Source]) -> str:
+def without_citations(text: str) -> str:
+    """An earlier answer with its [n] markers removed (they point at that answer's own sources)."""
+    return re.sub(r"\s*" + CITATION.pattern, "", text).strip()
+
+
+def format_history(history: list[Turn]) -> str:
+    lines = []
+    for turn in history[-HISTORY_TURNS:]:
+        answer = without_citations(turn.answer)
+        if len(answer) > HISTORY_ANSWER_CHARS:
+            answer = answer[:HISTORY_ANSWER_CHARS].rsplit(" ", 1)[0] + " …"
+        lines.append(f"Q: {turn.question}\nA: {answer}")
+    return "\n\n".join(lines)
+
+
+def build_prompt(question: str, sources: list[Source], history: list[Turn] | None = None) -> str:
     parts = ["Sources:"]
     for source in sources:
         parts.append(f"[{source.number}] {source.label}\n{source.text}")
@@ -116,9 +145,27 @@ def build_prompt(question: str, sources: list[Source]) -> str:
     if with_images:
         listed = ", ".join(f"image {i} is source [{n}]" for i, n in enumerate(with_images, start=1))
         parts.append(f"The images attached are the figures of some sources: {listed}.")
+    if history:
+        parts.append(
+            "Earlier in this conversation (for context only; take facts from the sources above):\n"
+            + format_history(history)
+        )
     parts.append(f"Question: {question}")
     parts.append("Answer from the sources above, citing them like [1].")
     return "\n\n".join(parts)
+
+
+def rewrite_prompt(question: str, history: list[Turn]) -> str:
+    return REWRITE_PROMPT.format(history=format_history(history), question=question)
+
+
+def clean_rewrite(reply: str) -> str:
+    """The rewritten question from a model reply, or "" if the reply isn't usable."""
+    lines = [line.strip() for line in reply.strip().splitlines() if line.strip()]
+    if not lines:
+        return ""
+    text = REWRITE_LABEL.sub("", lines[0]).strip().strip("\"'“”*").strip()
+    return text if 0 < len(text) <= MAX_REWRITE_CHARS else ""
 
 
 def cited_numbers(answer: str, source_count: int) -> list[int]:
@@ -159,6 +206,7 @@ class Answerer:
         self.max_answer_tokens = max_answer_tokens
 
     async def resolve_model(self, model_id: str) -> ModelChoice:
+        """Check a model id before answering. Raises AnswerError with the reason it can't be used."""
         if model_id == AWS_QWEN_ID:
             problem = self.bedrock.qwen_problem()
             if problem:
@@ -180,13 +228,73 @@ class Answerer:
 
         raise AnswerError(f"Unknown model {model_id!r}. Pick one from /api/models.")
 
-    async def prepare(self, question: str, model_id: str, document_ids: list[str] | None = None) -> Prepared:
-        model = await self.resolve_model(model_id)
-        result = await self.searcher.search(question, document_ids, limit=self.max_sources)
-        sources = select_sources([hit.chunk for hit in result.hits], self.max_sources, self.max_source_chars)
-        if model.vision and self.max_images > 0:
-            await self._attach_images(sources)
-        return Prepared(question, model, sources, result.mode, result.notice)
+    async def answer(
+        self,
+        question: str,
+        model: ModelChoice,
+        document_ids: list[str] | None = None,
+        history: list[Turn] | None = None,
+    ) -> AsyncIterator[Event]:
+        """Events for one answer. Never raises: problems arrive as an "error" event."""
+        started = time.perf_counter()
+        history = history or []
+        text: list[str] = []
+        first_token: float | None = None
+        search_query = question
+        sources: list[Source] = []
+        try:
+            if history:
+                yield Event("status", {"message": "Understanding your follow-up question."})
+                search_query = await self._rewrite(question, model, history)
+
+            result = await self.searcher.search(search_query, document_ids, limit=self.max_sources)
+            sources = select_sources([hit.chunk for hit in result.hits], self.max_sources, self.max_source_chars)
+            if model.vision and self.max_images > 0:
+                await self._attach_images(sources)
+            yield Event(
+                "sources",
+                {"search_query": search_query, "mode": result.mode, "notice": result.notice, "sources": sources},
+            )
+
+            if not sources:
+                yield Event("token", {"text": NOTHING_INDEXED})
+                yield Event("done", self._done(model, NOTHING_INDEXED, sources, started, None))
+                return
+
+            images = tuple(s.image for s in sources if s.image)
+            messages = [ChatMessage("user", build_prompt(search_query, sources, history), images)]
+            async for event in self._generate(model, messages):
+                if event.type == "token":
+                    if first_token is None:
+                        first_token = time.perf_counter() - started
+                    text.append(event.data["text"])
+                yield event
+        except (OllamaError, BedrockError) as exc:
+            log.warning("Answer failed with %s: %s", model.id, exc)
+            yield Event("error", {"message": str(exc), "partial_answer": "".join(text)})
+            return
+        except Exception as exc:  # noqa: BLE001 - the stream must end with an event, not a broken connection
+            log.exception("Unexpected error while answering")
+            yield Event("error", {"message": f"Something went wrong: {exc}", "partial_answer": "".join(text)})
+            return
+        yield Event("done", self._done(model, "".join(text), sources, started, first_token))
+
+    async def _rewrite(self, question: str, model: ModelChoice, history: list[Turn]) -> str:
+        """The follow-up as a complete question. Falls back to joining it with the last question."""
+        messages = [ChatMessage("user", rewrite_prompt(question, history))]
+        try:
+            if model.provider == "aws":
+                reply = await self.bedrock.qwen(messages, system=REWRITE_SYSTEM_PROMPT, max_tokens=120, temperature=0)
+            else:
+                options = {"num_ctx": self.num_ctx, "temperature": 0, "num_predict": 120}
+                async with self.ollama.gpu:
+                    await self.ollama.use_only(model.name, options=options)
+                    reply = await self.ollama.chat(model.name, messages, system=REWRITE_SYSTEM_PROMPT, options=options)
+        except (OllamaError, BedrockError) as exc:
+            log.warning("Couldn't rewrite the follow-up question: %s", exc)
+            reply = ""
+        rewritten = clean_rewrite(reply)
+        return rewritten or f"{history[-1].question} {question}"
 
     async def _attach_images(self, sources: list[Source]) -> None:
         attached = 0
@@ -203,33 +311,6 @@ class Answerer:
             attached += 1
             if attached == self.max_images:
                 break
-
-    async def stream(self, prepared: Prepared) -> AsyncIterator[Event]:
-        """Events for one answer. Never raises: problems arrive as an "error" event."""
-        started = time.perf_counter()
-        yield Event("sources", {"mode": prepared.search_mode, "notice": prepared.notice, "sources": prepared.sources})
-
-        if not prepared.sources:
-            yield Event("token", {"text": NOTHING_INDEXED})
-            yield Event("done", self._done(prepared, NOTHING_INDEXED, started, None))
-            return
-
-        images = tuple(s.image for s in prepared.sources if s.image)
-        messages = [ChatMessage("user", build_prompt(prepared.question, prepared.sources), images)]
-        answer: list[str] = []
-        first_token: float | None = None
-        try:
-            async for event in self._generate(prepared.model, messages):
-                if event.type == "token":
-                    if first_token is None:
-                        first_token = time.perf_counter() - started
-                    answer.append(event.data["text"])
-                yield event
-        except (OllamaError, BedrockError) as exc:
-            log.warning("Answer failed with %s: %s", prepared.model.id, exc)
-            yield Event("error", {"message": str(exc), "partial_answer": "".join(answer)})
-            return
-        yield Event("done", self._done(prepared, "".join(answer), started, first_token))
 
     async def _generate(self, model: ModelChoice, messages: list[ChatMessage]) -> AsyncIterator[Event]:
         if model.provider == "aws":
@@ -250,11 +331,13 @@ class Answerer:
             async for piece in self.ollama.chat_stream(model.name, messages, system=SYSTEM_PROMPT, options=options):
                 yield Event("token", {"text": piece})
 
-    def _done(self, prepared: Prepared, answer: str, started: float, first_token: float | None) -> dict:
+    def _done(
+        self, model: ModelChoice, answer: str, sources: list[Source], started: float, first_token: float | None
+    ) -> dict:
         return {
             "answer": answer,
-            "cited": cited_numbers(answer, len(prepared.sources)),
-            "model": prepared.model.id,
+            "cited": cited_numbers(answer, len(sources)),
+            "model": model.id,
             "seconds": round(time.perf_counter() - started, 2),
             "first_token_seconds": round(first_token, 2) if first_token is not None else None,
         }

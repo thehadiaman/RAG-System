@@ -62,23 +62,24 @@ async def chat(
     answerer: Answerer = Depends(get_answerer),
     db: Database = Depends(get_db),
 ) -> StreamingResponse:
-    """Answer a question from your documents, streamed as Server-Sent Events.
+    """Answer a one-off question from your documents (nothing is saved), streamed as Server-Sent Events.
 
     Events, in order: `sources` (the numbered sources the model reads), `status`
     (optional progress notes), `token` (pieces of the answer), then `done`
-    (the full answer and which sources it cited) or `error`.
+    (the full answer and which sources it cited) or `error`. For saved
+    conversations with follow-up questions, use /api/chats.
     """
     if request.document_ids:
         unknown = [doc_id for doc_id in request.document_ids if documents.get(db, doc_id) is None]
         if unknown:
             raise HTTPException(404, f"Unknown document id(s): {', '.join(unknown)}")
     try:
-        prepared = await answerer.prepare(request.question, request.model, request.document_ids)
+        model = await answerer.resolve_model(request.model)
     except AnswerError as exc:
         raise HTTPException(400, str(exc)) from exc
 
     async def events() -> AsyncIterator[str]:
-        async for event in answerer.stream(prepared):
+        async for event in answerer.answer(request.question, model, request.document_ids):
             yield sse(event)
 
     return StreamingResponse(

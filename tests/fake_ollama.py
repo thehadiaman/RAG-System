@@ -40,12 +40,15 @@ SCANNED_REPLY = "# Scanned page\n\nTotal revenue was AED 5 million."
 
 
 ANSWER_REPLY = "Retail revenue rose to 1,350 [1], and online grew 30.0% [1][2]."
+REWRITE_REPLY = "What was Wholesale revenue in 2025?"
 
 
 def default_chat_reply(body: dict) -> str:
     prompt = body["messages"][-1]["content"]
     if prompt.startswith("Sources:"):
         return ANSWER_REPLY
+    if prompt.startswith("Conversation so far:"):
+        return REWRITE_REPLY
     return SCANNED_REPLY if "scanned PDF" in prompt else FIGURE_REPLY
 
 

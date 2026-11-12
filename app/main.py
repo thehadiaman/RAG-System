@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.answer import Answerer
-from app.api import aws, chat, documents, extractors, health, models, search
+from app.api import aws, chat, chats, documents, extractors, health, models, search
 from app.config import Settings, get_settings
 from app.ingest.jobs import IngestQueue
 from app.ingest.vision import VisionService
@@ -97,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(extractors.router, prefix="/api")
     app.include_router(search.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
+    app.include_router(chats.router, prefix="/api")
 
     # The web UI is plain static files served by this same server.
     # Mounted last so every /api route takes priority.

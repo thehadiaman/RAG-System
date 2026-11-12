@@ -135,6 +135,16 @@ MIGRATIONS: list[str] = [
         DELETE FROM chunks_fts WHERE rowid = old.seq;
     END;
     """,
+    # 5: saved chats. A chat can be limited to some documents, and each answer
+    # keeps what it was based on and how it ended.
+    """
+    ALTER TABLE chats ADD COLUMN document_ids TEXT;  -- JSON list; NULL means all documents
+    ALTER TABLE messages ADD COLUMN cited TEXT;  -- JSON list of the source numbers the answer cites
+    ALTER TABLE messages ADD COLUMN search_query TEXT;  -- the complete question that was searched
+    ALTER TABLE messages ADD COLUMN seconds REAL;
+    ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'complete';  -- complete, stopped or error
+    ALTER TABLE messages ADD COLUMN error TEXT;
+    """,
 ]
 
 
