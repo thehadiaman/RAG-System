@@ -56,6 +56,15 @@ def test_web_ui_files_are_served(client, path, content_type):
     assert response.headers["content-type"].startswith(content_type)
 
 
+@pytest.mark.parametrize("path", ["/", "/js/details.js"])
+def test_browsers_check_for_a_newer_web_ui_on_each_load(client, path):
+    first = client.get(path)
+    assert first.headers["cache-control"] == "no-cache"
+
+    unchanged = client.get(path, headers={"if-none-match": first.headers["etag"]})
+    assert unchanged.status_code == 304
+
+
 def test_unexpected_errors_return_a_clear_message(make_app, monkeypatch):
     from fastapi.testclient import TestClient
 

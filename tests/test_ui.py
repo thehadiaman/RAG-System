@@ -4,6 +4,7 @@ Set SCREENSHOT_DIR to also save screenshots.
 """
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,60 @@ def test_details_show_pages_with_their_text_and_figures(page, sample_pdf):
 
     dialog.get_by_role("button", name="Close").click()
     expect(dialog).to_be_hidden()
+
+
+def test_details_stay_open_until_closed_on_purpose(page, sample_pdf):
+    upload_and_wait(page, sample_pdf).locator(".doc-main").click()
+    dialog = page.locator("dialog#details")
+    thumb = dialog.locator(".page-thumb", has_text="Page 5")
+
+    # Double-clicking near the bottom of a page opens it. The first click switches to the page; the
+    # second must not land outside the dialog and close it.
+    thumb.dblclick(position={"x": 20, "y": thumb.bounding_box()["height"] - 4})
+    expect(dialog.locator(".page-view-head strong")).to_have_text("Page 5 of 5")
+    page.wait_for_timeout(500)
+    expect(dialog).to_be_visible()
+
+    # A click on empty space inside the dialog keeps it open; a click on the dark area around it closes it.
+    box = dialog.bounding_box()
+    page.mouse.click(box["x"] + box["width"] - 6, box["y"] + box["height"] - 6)
+    expect(dialog).to_be_visible()
+    page.mouse.click(4, 4)
+    expect(dialog).to_be_hidden()
+
+    # In a short window the list scrolls. A page opened from further down is shown from its top,
+    # and "All pages" goes back to where the list was.
+    page.set_viewport_size({"width": 1280, "height": 420})
+    page.locator(".doc-main").click()
+    dialog.evaluate("d => { d.scrollTop = d.scrollHeight; }")
+    thumb.click()
+    expect(dialog.locator(".page-view-head strong")).to_have_text("Page 5 of 5")
+    expect(dialog.locator(".page-view-head")).to_be_in_viewport()
+    dialog.get_by_role("button", name="← All pages").click()
+    expect(thumb).to_be_in_viewport(ratio=0.9)
+
+
+def test_an_open_page_stays_while_the_document_is_still_processing(page, sample_pdf):
+    upload_and_wait(page, sample_pdf)
+    one_document = re.compile(r"/api/documents/[0-9a-f]+$")
+
+    def still_reading_charts(route):
+        response = route.fetch()
+        route.fulfill(response=response, json={**response.json(), "status": "describing"})
+
+    page.route(one_document, still_reading_charts)
+    page.locator(".doc-main").click()
+    dialog = page.locator("dialog#details")
+    dialog.locator(".page-thumb", has_text="Page 2").click()
+    expect(dialog.locator(".page-view-head strong")).to_have_text("Page 2 of 5")
+
+    # The dialog checks on the document every few seconds; the page stays open meanwhile.
+    for _ in range(2):
+        with page.expect_request(one_document):
+            pass
+    expect(dialog.locator(".page-view-head strong")).to_have_text("Page 2 of 5")
+    expect(dialog.locator(".details-summary progress")).to_be_attached()
+    page.unroute_all(behavior="ignoreErrors")
 
 
 def test_charts_read_by_the_local_model_show_their_descriptions(page, sample_pdf):

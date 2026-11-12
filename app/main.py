@@ -26,6 +26,16 @@ STATIC_DIR = Path(__file__).parent / "static"
 log = logging.getLogger("app")
 
 
+class UIFiles(StaticFiles):
+    """The web page's files. Browsers check for a newer copy on every load (a quick "not modified"
+    when nothing changed), so an updated app shows up without a hard refresh."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def make_ollama(settings: Settings) -> OllamaClient:
     return OllamaClient(
         settings.ollama_base_url,
@@ -141,7 +151,7 @@ def create_app() -> FastAPI:
 
     # The web UI is plain static files served by this same server.
     # Mounted last so every /api route takes priority.
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
+    app.mount("/", UIFiles(directory=STATIC_DIR, html=True), name="ui")
     return app
 
 

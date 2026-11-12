@@ -12,6 +12,11 @@ function countOf(n, kind) {
   return UNCOUNTABLE.has(kind) ? `${n} ${kind}` : plural(n, kind);
 }
 
+function isOutside(element, event) {
+  const box = element.getBoundingClientRect();
+  return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+}
+
 export class DetailsDialog {
   constructor(dialog, { extractors, onChanged }) {
     this.dialog = dialog;
@@ -20,19 +25,32 @@ export class DetailsDialog {
     this.timer = null;
     this.docId = null;
     this.tab = "pages";
+    this.page = null; // the page being viewed, or null while the list of pages is shown
+    this.pageRequest = 0; // counts page loads, so a slow one can't replace a later choice
+    this.listScroll = 0; // where the list of pages was scrolled to, to go back there
     dialog.addEventListener("close", () => {
       clearTimeout(this.timer);
       this.docId = null;
     });
-    // Clicking the dark area around the dialog closes it.
+    // A click on the dark area around the dialog closes it. The press and the release both have to
+    // be outside the dialog's box: empty space inside it, or a text selection that ends outside it,
+    // keeps it open.
+    let pressedOutside = false;
+    dialog.addEventListener("pointerdown", (event) => {
+      pressedOutside = isOutside(dialog, event);
+    });
     dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) dialog.close();
+      if (event.target === dialog && pressedOutside && isOutside(dialog, event)) dialog.close();
+      pressedOutside = false;
     });
   }
 
   async open(docId, pageNo = null) {
     this.docId = docId;
     this.tab = "pages";
+    this.page = null;
+    this.pageRequest += 1;
+    this.listScroll = 0;
     this.dialog.replaceChildren(h("p", { class: "loading" }, "Loading…"));
     if (!this.dialog.open) this.dialog.showModal();
     await this.load();
@@ -52,19 +70,31 @@ export class DetailsDialog {
     }
     if (docId !== this.docId) return; // closed or switched while loading
     this.doc = doc;
-    this.render();
+    this.refresh();
     if (IN_PROGRESS.has(doc.status)) this.timer = setTimeout(() => this.load(), POLL_MS);
   }
 
   render() {
     const doc = this.doc;
-    this.dialog.replaceChildren(
-      this.header(doc),
-      this.summary(doc),
-      this.actions(doc),
-      this.tabs(),
-      h("div", { class: "tab-body" }, this.tab === "pages" ? this.pagesGrid(doc) : this.figuresList(doc)),
-    );
+    this.dialog.replaceChildren(...this.frame(doc), h("div", { class: "tab-body" }, this.tabContent(doc)));
+  }
+
+  // While a document is processing, the dialog is refreshed every few seconds. An open page is
+  // left as it is, so it can be read meanwhile; only the parts around it are refreshed.
+  refresh() {
+    const body = this.dialog.querySelector(".tab-body");
+    if (!this.page || !body) return this.render();
+    for (const node of [...this.dialog.children]) if (node !== body) node.remove();
+    body.before(...this.frame(this.doc));
+  }
+
+  frame(doc) {
+    return [this.header(doc), this.summary(doc), this.actions(doc), this.tabs()];
+  }
+
+  tabContent(doc) {
+    if (this.tab === "figures") return this.figuresList(doc);
+    return this.page ? this.pageView(this.page) : this.pagesGrid(doc);
   }
 
   header(doc) {
@@ -152,6 +182,8 @@ export class DetailsDialog {
         "aria-selected": String(this.tab === id),
         onclick: () => {
           this.tab = id;
+          this.page = null;
+          this.pageRequest += 1;
           this.render();
         },
       }, label);
@@ -179,20 +211,45 @@ export class DetailsDialog {
     );
   }
 
+  // What's on screen stays until the page has loaded: swapping in a short "Loading" line would move
+  // things under the mouse, and the second click of a double-click would land somewhere else.
   async showPage(pageNo) {
-    const body = this.dialog.querySelector(".tab-body");
-    body.replaceChildren(h("p", { class: "loading" }, "Loading page…"));
+    const docId = this.docId;
+    const request = ++this.pageRequest;
+    if (!this.page) this.listScroll = this.dialog.scrollTop;
+    this.dialog.querySelector(".tab-body")?.setAttribute("aria-busy", "true");
     let page;
     try {
-      page = await api.page(this.doc.id, pageNo);
+      page = await api.page(docId, pageNo);
     } catch (error) {
-      body.replaceChildren(h("p", { class: "error-text" }, error.message));
+      if (request !== this.pageRequest) return;
+      this.dialog.querySelector(".tab-body")?.removeAttribute("aria-busy");
+      toast(error.message, "error");
       return;
     }
+    if (request !== this.pageRequest || docId !== this.docId) return; // another page, tab or document was chosen meanwhile
+    this.page = page;
+    const body = this.dialog.querySelector(".tab-body");
+    body.removeAttribute("aria-busy");
+    body.replaceChildren(...this.pageView(page));
+    // Coming from further down the list, show the page from its top, just under the dialog's header.
+    const top = body.offsetTop - this.dialog.querySelector(".details-head").offsetHeight;
+    if (this.dialog.scrollTop > top) this.dialog.scrollTop = top;
+  }
+
+  showList() {
+    this.page = null;
+    this.pageRequest += 1;
+    this.render();
+    this.dialog.scrollTop = this.listScroll;
+  }
+
+  pageView(page) {
+    const pageNo = page.page_no;
     const source = page.text_source === "vision" ? "Text read by the vision model (scanned page)" : "Text extracted from the PDF";
-    body.replaceChildren(
+    return [
       h("div", { class: "page-view-head" },
-        h("button", { type: "button", onclick: () => this.render() }, "← All pages"),
+        h("button", { type: "button", onclick: () => this.showList() }, "← All pages"),
         h("strong", {}, `Page ${pageNo} of ${this.doc.page_count}`),
         h("span", { class: "page-nav" },
           h("button", { type: "button", disabled: pageNo <= 1, onclick: () => this.showPage(pageNo - 1), "aria-label": "Previous page" }, "‹"),
@@ -207,7 +264,7 @@ export class DetailsDialog {
           h("pre", {}, page.text || "(no text on this page)"),
         ),
       ),
-    );
+    ];
   }
 
   figuresList(doc) {

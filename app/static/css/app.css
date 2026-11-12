@@ -296,7 +296,8 @@ progress::-moz-progress-bar { background: var(--accent); }
 
 .details {
   width: min(1100px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
+  /* A fixed height, so the dialog doesn't shrink or move when its content changes. */
+  height: calc(100vh - 48px);
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -339,6 +340,7 @@ progress::-moz-progress-bar { background: var(--accent); }
 .tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 12px; color: var(--muted); }
 .tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 .tab-body { padding-top: 16px; padding-bottom: 22px; }
+.tab-body[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 
 .page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
 .page-thumb { display: grid; gap: 6px; padding: 8px; text-align: left; background: var(--surface-2); }
