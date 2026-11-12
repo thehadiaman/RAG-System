@@ -26,45 +26,61 @@
   <div id="banner" class="banner" role="alert" hidden></div>
 
   <div class="layout">
-    <aside class="sidebar" aria-labelledby="documents-heading">
-      <div class="panel-head">
-        <h2 id="documents-heading">Documents</h2>
-        <span id="documents-count" class="count"></span>
-      </div>
+    <aside class="sidebar">
+      <section class="side-section" aria-labelledby="chats-heading">
+        <div class="panel-head">
+          <h2 id="chats-heading">Chats</h2>
+          <button id="new-chat" type="button" class="primary small">New chat</button>
+        </div>
+        <ul id="chat-list" class="chat-list" aria-label="Saved chats"></ul>
+        <p id="chats-empty" class="empty" hidden>No chats yet.</p>
+      </section>
 
-      <fieldset id="extractor-choice" class="extractors">
-        <legend>Read charts and scanned pages with</legend>
-      </fieldset>
+      <section class="side-section" aria-labelledby="documents-heading">
+        <div class="panel-head">
+          <h2 id="documents-heading">Documents</h2>
+          <span id="documents-count" class="count"></span>
+        </div>
 
-      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-describedby="dropzone-hint">
-        <span class="dropzone-icon" aria-hidden="true"></span>
-        <span><strong>Drop PDFs here</strong> or <span class="link">choose files</span></span>
-        <span id="dropzone-hint" class="hint">PDF only</span>
-        <input id="file-input" type="file" accept="application/pdf,.pdf" multiple hidden>
-      </div>
+        <details id="upload-box" class="upload-box" open>
+          <summary>Upload PDFs</summary>
+          <fieldset id="extractor-choice" class="extractors">
+            <legend>Read charts and scanned pages with</legend>
+          </fieldset>
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-describedby="dropzone-hint">
+            <span class="dropzone-icon" aria-hidden="true"></span>
+            <span><strong>Drop PDFs here</strong> or <span class="link">choose files</span></span>
+            <span id="dropzone-hint" class="hint">PDF only</span>
+            <input id="file-input" type="file" accept="application/pdf,.pdf" multiple hidden>
+          </div>
+        </details>
 
-      <ul id="uploads" class="uploads" aria-label="Uploads in progress"></ul>
-      <ul id="document-list" class="doc-list" aria-label="Your documents"></ul>
-      <p id="documents-empty" class="empty" hidden>No documents yet. Upload a PDF to get started.</p>
+        <ul id="uploads" class="uploads" aria-label="Uploads in progress"></ul>
+        <ul id="document-list" class="doc-list" aria-label="Your documents"></ul>
+        <p id="documents-empty" class="empty" hidden>No documents yet. Upload a PDF to get started.</p>
+      </section>
     </aside>
 
     <main class="main" id="main">
-      <section class="welcome">
-        <h1>Ask questions about your PDFs</h1>
-        <p>
-          Upload reports on the left. Their text, tables, charts and scanned pages are read and
-          indexed, so you can ask about any of it and see exactly which page each answer comes from.
-        </p>
-        <ol class="steps">
-          <li><strong>Pick who reads the charts.</strong> Qwen on this computer, Nova Lite on AWS, or text only.</li>
-          <li><strong>Upload a PDF</strong> and wait until it says <em>Ready</em>.</li>
-          <li><strong>Choose a model</strong> at the top for answering questions.</li>
-        </ol>
-        <p class="muted">Chat is coming in the next update.</p>
-      </section>
+      <div class="chat-head">
+        <h1 id="chat-title" class="chat-title">New chat</h1>
+        <details id="doc-filter" class="doc-filter">
+          <summary>All documents</summary>
+          <div class="doc-filter-body"></div>
+        </details>
+      </div>
+      <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Conversation"></div>
+      <form id="composer" class="composer">
+        <label for="question" class="visually-hidden">Your question</label>
+        <textarea id="question" rows="1" placeholder="Ask about your documents…"></textarea>
+        <button id="send" type="submit" class="primary">Send</button>
+        <button id="stop" type="button" class="danger" hidden>Stop</button>
+      </form>
+      <p class="composer-hint">Enter to send · Shift+Enter for a new line</p>
     </main>
   </div>
 
+  <aside id="source-panel" class="source-panel" aria-labelledby="source-title" hidden></aside>
   <dialog id="details" class="details" aria-labelledby="details-title"></dialog>
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 </body>

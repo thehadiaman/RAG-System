@@ -46,3 +46,14 @@ export function store(key, value) {
   }
   return null;
 }
+
+// "just now", "5 min ago", "3 h ago", "yesterday", or a date.
+export function timeAgo(iso) {
+  const then = new Date(iso);
+  const seconds = (Date.now() - then.getTime()) / 1000;
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  if (seconds < 172800) return "yesterday";
+  return then.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}

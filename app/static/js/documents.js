@@ -41,8 +41,9 @@ export function extractorName(id) {
 }
 
 export class DocumentsPanel {
-  constructor({ list, empty, count, uploads, dropzone, fileInput, extractorChoice, onOpen }) {
-    Object.assign(this, { list, empty, count, uploads, dropzone, fileInput, extractorChoice, onOpen });
+  constructor({ list, empty, count, uploads, dropzone, fileInput, extractorChoice, uploadBox, onOpen }) {
+    Object.assign(this, { list, empty, count, uploads, dropzone, fileInput, extractorChoice, uploadBox, onOpen });
+    this.firstRender = true;
     this.timer = null;
     this.documents = [];
     this.extractors = [];
@@ -167,6 +168,11 @@ export class DocumentsPanel {
 
   render() {
     const docs = this.documents;
+    if (this.firstRender && this.uploadBox) {
+      // Keep the sidebar short once there are documents; the box opens with one click.
+      this.uploadBox.open = docs.length === 0;
+      this.firstRender = false;
+    }
     this.empty.hidden = docs.length > 0;
     this.count.textContent = docs.length ? String(docs.length) : "";
     this.list.replaceChildren(...docs.map((doc) => this.row(doc)));

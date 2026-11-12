@@ -54,6 +54,27 @@ function upload(file, extractor, onProgress) {
   });
 }
 
+// Ask a question in a chat. Returns the streaming response; read it with readEvents().
+async function ask(chatId, body, signal) {
+  let response;
+  try {
+    response = await fetch(`/api/chats/${chatId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    throw new ApiError("The app's server isn't responding. Is it running?", 0);
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new ApiError(detailMessage(data) || `${response.status} ${response.statusText}`, response.status);
+  }
+  return response;
+}
+
 export const api = {
   health: () => request("GET", "/api/health"),
   models: () => request("GET", "/api/models"),
@@ -66,4 +87,10 @@ export const api = {
   reindex: (id) => request("POST", `/api/documents/${id}/index`),
   deleteDocument: (id) => request("DELETE", `/api/documents/${id}`),
   upload,
+  chats: () => request("GET", "/api/chats"),
+  chat: (id) => request("GET", `/api/chats/${id}`),
+  createChat: (body) => request("POST", "/api/chats", body),
+  updateChat: (id, body) => request("PATCH", `/api/chats/${id}`, body),
+  deleteChat: (id) => request("DELETE", `/api/chats/${id}`),
+  ask,
 };

@@ -30,12 +30,13 @@ export class DetailsDialog {
     });
   }
 
-  async open(docId) {
+  async open(docId, pageNo = null) {
     this.docId = docId;
     this.tab = "pages";
     this.dialog.replaceChildren(h("p", { class: "loading" }, "Loading…"));
     if (!this.dialog.open) this.dialog.showModal();
     await this.load();
+    if (pageNo && this.doc?.id === docId) await this.showPage(pageNo);
   }
 
   async load() {

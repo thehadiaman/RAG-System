@@ -1,5 +1,6 @@
 """In-memory stand-in for the Ollama HTTP API, so tests don't need real models."""
 
+import asyncio
 import json
 import math
 import re
@@ -61,6 +62,7 @@ class FakeOllama:
         self.chat_reply = default_chat_reply
         self.chat_failures = 0  # the next this-many chat calls fail
         self.stream_error: str | None = None  # a streamed reply stops with this error
+        self.stream_delay = 0.0  # seconds between streamed pieces, to test stopping part way
 
     def client(self, **kwargs) -> OllamaClient:
         return OllamaClient("http://ollama.test", transport=httpx2.MockTransport(self.handle), **kwargs)
@@ -117,6 +119,8 @@ class FakeOllama:
                     lines.append({"error": self.stream_error})
                 else:
                     lines.append({"model": name, "message": {"role": "assistant", "content": ""}, "done": True})
+                if self.stream_delay:
+                    return httpx2.Response(200, content=self._slow_lines(lines))
                 return httpx2.Response(200, content="\n".join(json.dumps(line) for line in lines).encode())
             message = {"role": "assistant", "content": reply}
             return httpx2.Response(200, json={"model": name, "message": message, "done": True})
@@ -134,6 +138,11 @@ class FakeOllama:
             return httpx2.Response(200, json={"model": name, "done": True, "done_reason": "load"})
 
         return httpx2.Response(404, json={"error": "not found"})
+
+    async def _slow_lines(self, lines):
+        for line in lines:
+            yield (json.dumps(line) + "\n").encode()
+            await asyncio.sleep(self.stream_delay)
 
     @staticmethod
     def _tag(name: str) -> dict:

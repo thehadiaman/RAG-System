@@ -58,6 +58,7 @@ def shot(page, name, full_page=True):
 
 
 def upload_and_wait(page, pdf, extractor="none"):
+    page.locator("#upload-box").evaluate("box => { box.open = true; }")
     page.check(f"input[name=extractor][value={extractor}]")
     page.set_input_files("#file-input", str(pdf))
     row = page.locator(".doc", has_text=pdf.name)

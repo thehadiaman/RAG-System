@@ -6,7 +6,7 @@ Ask questions about your PDFs, including their images and financial charts, and 
 - **Reading charts and images in PDFs:** Qwen2.5-VL running locally in Ollama, or Amazon Nova Lite on AWS Bedrock.
 - **One server:** FastAPI serves both the API and the web page. Everything runs in Docker.
 
-The build is split into small phases; see [docs/PLAN.md](docs/PLAN.md). Current status: **Phase 11 of 13** (web UI: models and documents).
+The build is split into small phases; see [docs/PLAN.md](docs/PLAN.md). Current status: **Phase 12 of 13** (web UI: chat).
 
 ## Quick start
 
