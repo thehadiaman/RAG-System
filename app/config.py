@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     vision_max_megapixels: float = 1.0  # figures with more pixels than this are scaled down first
     vision_aws_concurrency: int = 4
 
+    # Answers
+    chat_num_ctx: int = 8192  # model context for a local chat model (same as the vision model's, so no reload)
+    chat_max_sources: int = 8  # how many search results the model reads
+    chat_max_source_chars: int = 12000  # total size of those results (about 3,000 tokens)
+    chat_max_images: int = 2  # chart images attached when the model can read images
+    chat_max_answer_tokens: int = 1024
+
     # Ollama on this machine (reachable from the container thanks to host networking).
     ollama_base_url: str = "http://127.0.0.1:11434"
     # How long a model stays in memory after its last use.

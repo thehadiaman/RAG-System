@@ -1,5 +1,6 @@
 from fastapi import Request
 
+from app.answer import Answerer
 from app.ingest.jobs import IngestQueue
 from app.ingest.vision import VisionService
 from app.llm.bedrock import BedrockClient
@@ -40,3 +41,7 @@ def get_vision(request: Request) -> VisionService:
 
 def get_searcher(request: Request) -> Searcher:
     return request.app.state.searcher
+
+
+def get_answerer(request: Request) -> Answerer:
+    return request.app.state.answerer

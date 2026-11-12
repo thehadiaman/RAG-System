@@ -137,15 +137,19 @@ class LocalDescriber:
 
     async def prepare(self) -> None:
         try:
-            await self.ollama.use_only(self.model, options=self._options)
+            async with self.ollama.gpu:
+                await self.ollama.use_only(self.model, options=self._options)
         except OllamaError as exc:
             raise VisionError(f"Couldn't load {self.model}: {exc}") from exc
 
     async def describe(self, image: ImageInput, prompt: str) -> str:
+        # The GPU is held for one figure at a time, so a chat question can get in between figures.
         try:
-            reply = await self.ollama.chat(
-                self.model, [ChatMessage("user", prompt, (image,))], system=SYSTEM_PROMPT, options=self._options
-            )
+            async with self.ollama.gpu:
+                await self.ollama.use_only(self.model, options=self._options)
+                reply = await self.ollama.chat(
+                    self.model, [ChatMessage("user", prompt, (image,))], system=SYSTEM_PROMPT, options=self._options
+                )
         except OllamaError as exc:
             raise VisionError(str(exc)) from exc
         return clean_reply(reply)

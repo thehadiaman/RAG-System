@@ -137,3 +137,20 @@ async def test_nova_gets_the_image_and_instructions():
     assert messages[0].images == (IMAGE,)
     assert kwargs["temperature"] == 0
     assert kwargs["system"]
+
+
+@pytest.mark.anyio
+async def test_reading_a_figure_waits_while_a_chat_answer_holds_the_gpu():
+    import asyncio
+
+    fake = FakeOllama()
+    describer = LocalDescriber(fake.client(), "qwen2.5vl:3b", num_ctx=8192)
+
+    await describer.ollama.gpu.acquire()  # a chat answer is being written
+    task = asyncio.ensure_future(describer.describe(IMAGE, "Describe it"))
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    assert fake.calls_to("/api/chat") == []
+
+    describer.ollama.gpu.release()
+    assert (await task).startswith("Type: chart")

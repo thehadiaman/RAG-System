@@ -39,8 +39,13 @@ Data:
 SCANNED_REPLY = "# Scanned page\n\nTotal revenue was AED 5 million."
 
 
+ANSWER_REPLY = "Retail revenue rose to 1,350 [1], and online grew 30.0% [1][2]."
+
+
 def default_chat_reply(body: dict) -> str:
     prompt = body["messages"][-1]["content"]
+    if prompt.startswith("Sources:"):
+        return ANSWER_REPLY
     return SCANNED_REPLY if "scanned PDF" in prompt else FIGURE_REPLY
 
 
@@ -52,6 +57,7 @@ class FakeOllama:
         self.calls: list[tuple[str, str, dict]] = []
         self.chat_reply = default_chat_reply
         self.chat_failures = 0  # the next this-many chat calls fail
+        self.stream_error: str | None = None  # a streamed reply stops with this error
 
     def client(self, **kwargs) -> OllamaClient:
         return OllamaClient("http://ollama.test", transport=httpx2.MockTransport(self.handle), **kwargs)
@@ -99,7 +105,17 @@ class FakeOllama:
                 return httpx2.Response(500, json={"error": "model runner crashed"})
             if name not in self.loaded:
                 self.loaded.append(name)
-            message = {"role": "assistant", "content": self.chat_reply(body)}
+            reply = self.chat_reply(body)
+            if body.get("stream"):
+                # Ollama streams one JSON object per line; split the reply into word-sized pieces.
+                pieces = re.findall(r"\S+\s*", reply)
+                lines = [{"model": name, "message": {"role": "assistant", "content": p}, "done": False} for p in pieces]
+                if self.stream_error:
+                    lines.append({"error": self.stream_error})
+                else:
+                    lines.append({"model": name, "message": {"role": "assistant", "content": ""}, "done": True})
+                return httpx2.Response(200, content="\n".join(json.dumps(line) for line in lines).encode())
+            message = {"role": "assistant", "content": reply}
             return httpx2.Response(200, json={"model": name, "message": message, "done": True})
 
         if route == ("POST", "/api/generate"):

@@ -3,13 +3,19 @@
 The GPU only has room for one chat or vision model at a time, so `use_only()`
 unloads every other model (except ones you ask to keep, like the embedder)
 before loading the model that is about to be used.
+
+Anything that uses a local chat or vision model holds the `gpu` lock while it
+does, so a chat answer and the PDF-reading step take turns instead of
+swapping models under each other.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import httpx2
@@ -75,6 +81,8 @@ class OllamaClient:
         self.keep_loaded = tuple(full_name(name) for name in keep_loaded)
         self._capabilities_cache: dict[str, tuple[str, ...]] = {}
         self._switch_lock = asyncio.Lock()
+        # Held while a local chat or vision model is in use (see the module docstring).
+        self.gpu = asyncio.Lock()
 
     @property
     def base_url(self) -> str:
@@ -179,6 +187,42 @@ class OllamaClient:
             payload["options"] = options
         data = await self._request("POST", "/api/chat", json=payload, timeout=CHAT_TIMEOUT)
         return data.get("message", {}).get("content", "")
+
+    async def chat_stream(
+        self,
+        model: str,
+        messages: list[ChatMessage],
+        system: str | None = None,
+        options: dict | None = None,
+    ) -> AsyncIterator[str]:
+        """The reply as it is generated, piece by piece."""
+        payload: dict = {
+            "model": model,
+            "messages": _chat_messages(messages, system),
+            "stream": True,
+            "keep_alive": self.keep_alive,
+        }
+        if options:
+            payload["options"] = options
+        try:
+            async with self._http.stream("POST", "/api/chat", json=payload, timeout=CHAT_TIMEOUT) as response:
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode(errors="replace")[:300]
+                    raise OllamaError(f"Ollama returned {response.status_code} for /api/chat: {body}")
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+                    if data.get("error"):
+                        raise OllamaError(f"Ollama stopped with an error: {data['error']}")
+                    piece = data.get("message", {}).get("content", "")
+                    if piece:
+                        yield piece
+                    if data.get("done"):
+                        break
+        except httpx2.HTTPError as exc:
+            detail = str(exc) or type(exc).__name__
+            raise OllamaError(f"Can't reach Ollama at {self.base_url} ({detail}). Is Ollama running?") from exc
 
     async def unload(self, name: str) -> None:
         await self._request("POST", "/api/generate", json={"model": name, "keep_alive": 0})

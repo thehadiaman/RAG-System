@@ -34,6 +34,11 @@ class FakeBedrock:
     async def qwen(self, messages: list[ChatMessage], **kwargs) -> str:
         return self._answer("qwen", messages, kwargs, self.qwen_reply)
 
+    async def qwen_stream(self, messages: list[ChatMessage], **kwargs):
+        reply = self._answer("qwen_stream", messages, kwargs, self.qwen_reply)
+        for word in reply.split(" "):
+            yield word + " "
+
     def _answer(self, model: str, messages, kwargs, reply: str) -> str:
         self.calls.append((model, messages, kwargs))
         if self.error:

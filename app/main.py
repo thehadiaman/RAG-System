@@ -5,7 +5,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import aws, documents, extractors, health, models, search
+from app.answer import Answerer
+from app.api import aws, chat, documents, extractors, health, models, search
 from app.config import Settings, get_settings
 from app.ingest.jobs import IngestQueue
 from app.ingest.vision import VisionService
@@ -52,6 +53,17 @@ async def lifespan(app: FastAPI):
     app.state.embedder = Embedder(app.state.ollama, settings.ollama_embed_model, settings.embed_batch_size)
     app.state.bedrock = make_bedrock(settings)
     app.state.searcher = Searcher(app.state.db, app.state.vectors, app.state.embedder)
+    app.state.answerer = Answerer(
+        app.state.searcher,
+        app.state.ollama,
+        app.state.bedrock,
+        settings.data_dir,
+        num_ctx=settings.chat_num_ctx,
+        max_sources=settings.chat_max_sources,
+        max_source_chars=settings.chat_max_source_chars,
+        max_images=settings.chat_max_images,
+        max_answer_tokens=settings.chat_max_answer_tokens,
+    )
     app.state.vision = VisionService(
         app.state.ollama,
         app.state.bedrock,
@@ -84,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix="/api")
     app.include_router(extractors.router, prefix="/api")
     app.include_router(search.router, prefix="/api")
+    app.include_router(chat.router, prefix="/api")
 
     # The web UI is plain static files served by this same server.
     # Mounted last so every /api route takes priority.

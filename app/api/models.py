@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.answer import AWS_QWEN_ID
 from app.api.deps import get_bedrock, get_ollama
 from app.llm.bedrock import QWEN_LABEL, BedrockClient
 from app.llm.ollama import OllamaClient, OllamaError, full_name
@@ -10,8 +11,6 @@ from app.llm.ollama import OllamaClient, OllamaError, full_name
 log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["models"])
-
-AWS_QWEN_ID = "aws:qwen2.5-vl"
 
 
 class ChatModel(BaseModel):
