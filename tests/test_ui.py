@@ -12,6 +12,7 @@ import pytest
 playwright = pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
+from tests.fake_embedder import FakeEmbedder  # noqa: E402
 from tests.fake_ollama import FakeOllama  # noqa: E402
 from tests.pdf_factory import build_sample_pdf  # noqa: E402
 
@@ -237,13 +238,15 @@ def test_files_that_are_not_pdfs_are_refused(page, tmp_path):
     expect(page.locator(".doc")).to_have_count(0)
 
 
-@pytest.mark.parametrize("fake_ollama", [FakeOllama(models={"llama3.2:3b": ["completion"]})])
-def test_banner_says_how_to_fix_a_missing_embedding_model(page):
+@pytest.mark.parametrize(
+    "fake_embedder", [FakeEmbedder(problem="The search model's files are missing. Rebuild the app: docker compose up -d --build")]
+)
+def test_banner_says_how_to_fix_a_broken_search_model(page):
     banner = page.locator("#banner")
 
     expect(banner).to_be_visible()
-    expect(banner).to_contain_text("ollama pull nomic-embed-text")
-    expect(page.locator("input[name=extractor][value=local]")).to_be_disabled()  # no vision model either
+    expect(banner).to_contain_text("Search model: The search model's files are missing")
+    expect(banner).to_contain_text("docker compose up -d --build")
 
 
 def test_layout_in_dark_mode_and_on_a_narrow_screen(browser, live_server, sample_pdf):

@@ -42,8 +42,18 @@ class _Stopping(Exception):
     """The app is shutting down; leave the document to be resumed on the next start."""
 
 
+NOT_SEARCHABLE = "Not searchable yet:"
+
+
 def document_dir(data_dir: Path, doc_id: str) -> Path:
     return data_dir / "documents" / doc_id
+
+
+def without_index_problem(warning: str | None) -> str | None:
+    """The warning without an earlier indexing failure, which comes last in it."""
+    if not warning:
+        return warning
+    return warning.split(NOT_SEARCHABLE)[0].strip() or None
 
 
 class IngestQueue:
@@ -70,6 +80,10 @@ class IngestQueue:
 
     def start(self) -> None:
         self._worker = asyncio.create_task(self._run(), name="ingest-worker")
+        if self.embedder is not None:
+            stale = documents.mark_for_reindex(self.db, self.embedder.model)
+            if stale:
+                log.info("Re-indexing %d documents for the search model %s", len(stale), self.embedder.label)
         for doc_id in documents.ids_with_status(self.db, PENDING_ON_START):
             log.info("Resuming document %s", doc_id)
             self.enqueue(doc_id)
@@ -208,6 +222,7 @@ class IngestQueue:
             )
         except EmbedderError as exc:
             # The text is safe; it just can't be searched until indexing is run again.
-            problem = f"Not searchable yet: {exc}"
+            problem = f"{NOT_SEARCHABLE} {exc}"
+            warning = without_index_problem(warning)
             return EXTRACTED, f"{warning} {problem}" if warning else problem
-        return READY, warning
+        return READY, without_index_problem(warning)

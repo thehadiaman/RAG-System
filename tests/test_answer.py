@@ -175,7 +175,7 @@ def figure_file(tmp_path):
 
 def answerer(tmp_path, hits, ollama=None, bedrock=None, **settings):
     fake = ollama or FakeOllama()
-    client = fake.client(keep_loaded=("nomic-embed-text",))
+    client = fake.client()
     return Answerer(StubSearcher(hits), client, bedrock or FakeBedrock(), tmp_path, **settings)
 
 

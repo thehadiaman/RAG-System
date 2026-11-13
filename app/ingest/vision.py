@@ -2,7 +2,7 @@
 
 Two backends, chosen per upload:
 - "local": Qwen2.5-VL in Ollama. One image at a time; the GPU is cleared of
-  other models first (the embedder on CPU stays).
+  other models first.
 - "aws": Amazon Nova Lite on Bedrock. Several images in parallel.
 "none" skips this step, so only the PDF's own text is used.
 """

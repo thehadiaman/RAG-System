@@ -24,15 +24,14 @@ How it was built, phase by phase: [docs/PLAN.md](docs/PLAN.md).
 
 - **Linux with Docker** and Docker Compose 2.24 or newer (`docker compose version`).
 - **Ollama** installed on the same machine and running (`ollama ps` works). The app reaches it at `127.0.0.1:11434`; you don't need to change Ollama's settings.
+- **Search needs nothing extra.** Its model (nomic-embed-text v1.5) is built into the app and runs on the CPU, with or without Ollama.
 - **Models in Ollama:**
-  - `nomic-embed-text` (required, 274 MB). It powers search and always runs on the CPU.
   - At least one **chat model** for answers. `qwen2.5vl:latest` (7B, 6 GB) answers and can also look at chart images. Smaller models answer faster.
   - **`qwen2.5vl`** if you want charts read on this computer. The 7B version runs about half on the CPU with a 6 GB GPU. `qwen2.5vl:3b` fits fully in 6 GB and is much faster, but reads charts less well.
-- **Disk:** about 1.1 GB for the app image, plus your PDFs and their page images (roughly 2–4× the PDF size).
+- **Disk:** about 1.3 GB for the app image, plus your PDFs and their page images (roughly 2–4× the PDF size).
 - **GPU:** optional. An NVIDIA GPU makes local models much faster. The app keeps only one chat or vision model in the GPU at a time.
 
 ```bash
-ollama pull nomic-embed-text
 ollama pull qwen2.5vl          # reads charts and answers; or qwen2.5vl:3b for speed
 ```
 
@@ -48,6 +47,8 @@ Open **http://localhost:8000**.
 The app starts again by itself after a crash or a reboot. To stop it, run `docker compose stop`. To start it again, run `docker compose up -d`. To follow its log, run `docker compose logs -f app`. The first lines after a start say what is ready and what isn't.
 
 After changing `.env`, run `docker compose up -d` again so the app picks up the change.
+
+After an update that changes the search model, your documents show *Indexing* for a short while at the first start, as their search index is rebuilt. Their text and chart descriptions are kept.
 
 ## Use it
 
@@ -111,6 +112,7 @@ All settings live in `.env`; [.env.example](.env.example) lists every one with a
 | `CHAT_MAX_SOURCES` | `8` | How many search results the model reads per answer. Fewer means faster answers but less to go on. |
 | `CHAT_MAX_IMAGES` | `2` | Chart images sent along to models that can read images. Set `0` for faster answers. |
 | `MAX_UPLOAD_MB` | `100` | Largest PDF accepted. |
+| `EMBED_THREADS` | `0` | CPU threads for the search model; `0` means up to 4. |
 | `OLLAMA_KEEP_ALIVE` | `10m` | How long a model stays in memory after its last use. |
 
 ## Troubleshooting
@@ -124,7 +126,7 @@ All settings live in `.env`; [.env.example](.env.example) lists every one with a
 
 **A banner says Ollama can't be reached.** Start Ollama (`sudo systemctl start ollama`), then reload the page.
 
-**A banner says the embedding model is missing.** Run `ollama pull nomic-embed-text`. Documents that were read meanwhile show *Not searchable yet*. Open each one and choose *Rebuild search index*.
+**A banner says the search model isn't working.** Its files are part of the app image, so rebuild it: `docker compose up -d --build`. Documents that were read meanwhile show *Not searchable yet*. They are indexed again when the app starts.
 
 **A document is stuck.** Processing continues after a restart from where it stopped: run `docker compose restart app`. The document's details show any error.
 
@@ -157,11 +159,12 @@ docker compose run --rm -v "$PWD/shots:/shots" -e SCREENSHOT_DIR=/shots test pyt
 Layout:
 
 - `app/ingest/`: reading PDFs (`pdf.py`), the vision step (`vision.py`, `describe.py`), chunking and indexing (`chunker.py`, `index.py`) and the background worker (`jobs.py`).
-- `app/llm/`: clients for Ollama, Bedrock and the embedder.
+- `app/llm/`: clients for Ollama and Bedrock, and the built-in search model (`embedder.py`).
+- `scripts/fetch_search_model.py`: downloads the search model into the image at build time, pinned and checksummed.
 - `app/search.py`, `app/answer.py`, `app/checks.py`: hybrid search, answering and the number check.
 - `app/store/`: SQLite (with numbered migrations) and ChromaDB.
 - `app/api/`: the HTTP endpoints.
 - `app/static/`: the web page, plain HTML, CSS and JavaScript modules with no build step.
 - `tests/`: fakes for Ollama and AWS, PDF builders, and the tests.
 
-**Licenses:** the app's own code has no license file yet. Its dependencies are open source. PyMuPDF and pymupdf4llm are **AGPL-3.0**: fine for your own use, but if you offer the app to other people over a network, you must make its source code available to them or buy a commercial PyMuPDF license. marked (MIT) and DOMPurify (Apache-2.0/MPL-2.0) are included in `app/static/vendor/` with their licenses.
+**Licenses:** the app's own code has no license file yet. Its dependencies are open source. PyMuPDF and pymupdf4llm are **AGPL-3.0**: fine for your own use, but if you offer the app to other people over a network, you must make its source code available to them or buy a commercial PyMuPDF license. marked (MIT) and DOMPurify (Apache-2.0/MPL-2.0) are included in `app/static/vendor/` with their licenses. The search model, nomic-embed-text v1.5, is Apache-2.0 and runs on onnxruntime (MIT).

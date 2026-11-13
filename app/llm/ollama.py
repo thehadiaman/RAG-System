@@ -1,8 +1,7 @@
 """Client for the Ollama server running on this machine.
 
 The GPU only has room for one chat or vision model at a time, so `use_only()`
-unloads every other model (except ones you ask to keep, like the embedder)
-before loading the model that is about to be used.
+unloads every other model before loading the model that is about to be used.
 
 Anything that uses a local chat or vision model holds the `gpu` lock while it
 does, so a chat answer and the PDF-reading step take turns instead of
@@ -24,9 +23,8 @@ from app.llm.messages import ChatMessage
 
 log = logging.getLogger(__name__)
 
-# Loading a large model from disk, or embedding a big batch on CPU, can take a while.
+# Loading a large model from disk can take a while.
 LOAD_TIMEOUT = 300.0
-EMBED_TIMEOUT = 300.0
 # A vision model partly on CPU can take minutes for one large image.
 CHAT_TIMEOUT = 600.0
 
@@ -73,12 +71,9 @@ class OllamaClient:
         keep_alive: str = "10m",
         timeout: float = 30.0,
         transport: httpx2.AsyncBaseTransport | None = None,
-        keep_loaded: tuple[str, ...] = (),
     ) -> None:
         self._http = httpx2.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
         self.keep_alive = keep_alive
-        # Models that use_only() never unloads (the embedder, which runs on CPU).
-        self.keep_loaded = tuple(full_name(name) for name in keep_loaded)
         self._capabilities_cache: dict[str, tuple[str, ...]] = {}
         self._switch_lock = asyncio.Lock()
         # Held while a local chat or vision model is in use (see the module docstring).
@@ -140,21 +135,6 @@ class OllamaClient:
     async def has_model(self, name: str) -> bool:
         data = await self._request("GET", "/api/tags")
         return any(full_name(item["name"]) == full_name(name) for item in data.get("models", []))
-
-    async def embed(
-        self,
-        model: str,
-        inputs: list[str],
-        keep_alive: str | int | None = None,
-        options: dict | None = None,
-    ) -> list[list[float]]:
-        payload: dict = {"model": model, "input": inputs}
-        if keep_alive is not None:
-            payload["keep_alive"] = keep_alive
-        if options:
-            payload["options"] = options
-        data = await self._request("POST", "/api/embed", json=payload, timeout=EMBED_TIMEOUT)
-        return data["embeddings"]
 
     async def loaded_models(self) -> list[str]:
         """Names of the models currently in memory."""
@@ -227,19 +207,17 @@ class OllamaClient:
     async def unload(self, name: str) -> None:
         await self._request("POST", "/api/generate", json={"model": name, "keep_alive": 0})
 
-    async def use_only(self, name: str, keep: tuple[str, ...] = (), options: dict | None = None) -> list[str]:
-        """Make `name` the only model in memory, apart from `keep_loaded` and `keep`.
+    async def use_only(self, name: str, options: dict | None = None) -> list[str]:
+        """Make `name` the only model in memory.
 
         Returns the names of the models that were unloaded.
         """
         wanted = full_name(name)
-        spared = {wanted, *self.keep_loaded, *(full_name(k) for k in keep)}
-
         # One switch at a time, so two requests can't load two models at once.
         async with self._switch_lock:
             unloaded = []
             for loaded in await self.loaded_models():
-                if full_name(loaded) in spared:
+                if full_name(loaded) == wanted:
                     continue
                 log.info("Unloading %s to make room for %s", loaded, wanted)
                 await self.unload(loaded)

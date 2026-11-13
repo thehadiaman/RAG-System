@@ -105,6 +105,28 @@ def set_status(
             raise DocumentGone(doc_id)
 
 
+def set_embedded_with(db: Database, doc_id: str, model: str) -> None:
+    with db.session() as conn:
+        conn.execute("UPDATE documents SET embedded_with = ? WHERE id = ?", (model, doc_id))
+
+
+def mark_for_reindex(db: Database, model: str) -> list[str]:
+    """Sends ready documents whose vectors come from another search model back to indexing.
+
+    Returns their ids. Their text and chart descriptions are kept; only the vectors are made again.
+    """
+    with db.session() as conn:
+        rows = conn.execute(
+            f"""UPDATE documents SET
+                   status = ?, progress_note = 'Updating the search index',
+                   progress_done = 0, progress_total = 0, updated_at = {NOW}
+               WHERE status = ? AND (embedded_with IS NULL OR embedded_with != ?)
+               RETURNING id""",
+            (INDEXING, READY, model),
+        ).fetchall()
+    return [row["id"] for row in rows]
+
+
 def clear_extraction(db: Database, doc_id: str) -> None:
     """Remove pages and figures from an earlier, unfinished run."""
     with db.session() as conn:

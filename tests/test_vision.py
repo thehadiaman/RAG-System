@@ -121,11 +121,11 @@ async def test_text_only_is_always_available():
 @pytest.mark.anyio
 async def test_local_model_gets_the_gpu_with_the_same_context_size_it_will_use():
     fake = FakeOllama(loaded=["llama3.2:3b", "nomic-embed-text:latest"])
-    describer = LocalDescriber(fake.client(keep_loaded=("nomic-embed-text",)), "qwen2.5vl:3b", num_ctx=8192)
+    describer = LocalDescriber(fake.client(), "qwen2.5vl:3b", num_ctx=8192)
 
     await describer.prepare()
 
-    assert sorted(fake.loaded) == ["nomic-embed-text:latest", "qwen2.5vl:3b"]
+    assert fake.loaded == ["qwen2.5vl:3b"]
     assert fake.calls_to("/api/generate")[-1]["options"] == {"num_ctx": 8192, "temperature": 0, "num_predict": 1500}
 
 

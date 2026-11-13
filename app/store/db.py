@@ -149,6 +149,10 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE messages ADD COLUMN number_check TEXT;  -- JSON
     """,
+    # 7: which search model made a document's vectors, so a new model can re-index it
+    """
+    ALTER TABLE documents ADD COLUMN embedded_with TEXT;
+    """,
 ]
 
 

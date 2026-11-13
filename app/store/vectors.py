@@ -15,6 +15,11 @@ from chromadb.config import Settings as ChromaSettings
 COLLECTION = "chunks"
 
 
+def collection_for(model: str) -> str:
+    """Each search model gets its own collection: vectors from two models can't be compared."""
+    return f"{COLLECTION}-{model}"
+
+
 @dataclass(frozen=True)
 class VectorHit:
     chunk_id: str
@@ -23,7 +28,7 @@ class VectorHit:
 
 
 class VectorStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, collection: str = COLLECTION) -> None:
         path.mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(
             path=str(path),
@@ -31,10 +36,20 @@ class VectorStore:
         )
         # We always pass our own vectors, so Chroma never needs its own embedding model.
         self._collection = self._client.get_or_create_collection(
-            COLLECTION,
+            collection,
             configuration={"hnsw": {"space": "cosine"}},
             embedding_function=None,
         )
+        self.collection = collection
+
+    def remove_other_collections(self) -> list[str]:
+        """Deletes vectors made by earlier search models. Returns the names of the collections removed."""
+        removed = []
+        for collection in self._client.list_collections():
+            if collection.name != self.collection:
+                self._client.delete_collection(collection.name)
+                removed.append(collection.name)
+        return removed
 
     def count(self) -> int:
         return self._collection.count()

@@ -43,4 +43,5 @@ async def index_document(
         embeddings,
         [{"document_id": doc_id, "page_no": c.page_no, "kind": c.kind} for c in chunks],
     )
+    documents.set_embedded_with(db, doc_id, embedder.model)
     return len(chunks)

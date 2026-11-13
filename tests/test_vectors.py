@@ -1,6 +1,6 @@
 import pytest
 
-from app.store.vectors import VectorStore
+from app.store.vectors import VectorStore, collection_for
 
 
 @pytest.fixture
@@ -59,3 +59,16 @@ def test_deleting_a_document_removes_only_its_chunks(store):
 
     assert store.count() == 1
     assert [h.chunk_id for h in store.query([1.0, 0.0, 0.0])] == ["b1"]
+
+
+def test_vectors_from_an_earlier_search_model_are_removed(tmp_path):
+    old = VectorStore(tmp_path / "chroma")  # before Phase 14 the collection had no model in its name
+    add_samples(old)
+    add_samples(VectorStore(tmp_path / "chroma", collection_for("model-a")))
+
+    current = VectorStore(tmp_path / "chroma", collection_for("model-b"))
+    add_samples(current)
+
+    assert sorted(current.remove_other_collections()) == ["chunks", "chunks-model-a"]
+    assert current.count() == 3
+    assert VectorStore(tmp_path / "chroma", collection_for("model-a")).count() == 0

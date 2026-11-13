@@ -19,6 +19,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# The search model is built into the image, so search needs no Ollama and works offline.
+# Before the app code, so code changes don't download it again.
+COPY scripts/fetch_search_model.py /tmp/
+RUN HF_HUB_DISABLE_TELEMETRY=1 python /tmp/fetch_search_model.py /app/models/nomic-embed-text-v1.5 \
+    && rm /tmp/fetch_search_model.py
+
 COPY app ./app
 RUN mkdir -p /app/data && chown app:app /app/data
 

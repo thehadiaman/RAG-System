@@ -2,7 +2,7 @@ import pytest
 
 from app import __version__
 from app.store.db import MIGRATIONS
-from tests.fake_ollama import FakeOllama
+from tests.fake_embedder import FakeEmbedder
 
 
 def test_health_reports_every_component_ready(client):
@@ -13,19 +13,19 @@ def test_health_reports_every_component_ready(client):
     assert data["components"] == {
         "database": {"ok": True, "detail": f"schema version {len(MIGRATIONS)}"},
         "vectors": {"ok": True, "detail": "0 chunks"},
-        "embedder": {"ok": True, "detail": "nomic-embed-text"},
+        "embedder": {"ok": True, "detail": "fake-search-model (test)"},
     }
 
 
-@pytest.mark.parametrize("fake_ollama", [FakeOllama(models={"llama3.2:3b": ["completion"]})])
-def test_health_is_degraded_without_the_embedding_model(client):
+@pytest.mark.parametrize("fake_embedder", [FakeEmbedder(problem="The search model's files are missing")])
+def test_health_is_degraded_when_the_search_model_is_broken(client):
     response = client.get("/api/health")
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "degraded"
     assert data["components"]["embedder"]["ok"] is False
-    assert "ollama pull nomic-embed-text" in data["components"]["embedder"]["detail"]
+    assert data["components"]["embedder"]["detail"] == "The search model's files are missing"
 
 
 def test_index_page_is_served(client):
@@ -92,6 +92,6 @@ def test_startup_logs_what_is_ready(make_app, caplog):
         while "Qwen2.5-VL on AWS" not in caplog.text and time.monotonic() < deadline:
             time.sleep(0.05)
 
-    assert "Embedding model nomic-embed-text: ready" in caplog.text
+    assert "Search model fake-search-model (test): ready" in caplog.text
     assert "Charts read by Qwen2.5-VL on this computer (qwen2.5vl:3b): ready" in caplog.text
     assert "Charts read by Amazon Nova Lite (AWS): AWS keys are not set" in caplog.text

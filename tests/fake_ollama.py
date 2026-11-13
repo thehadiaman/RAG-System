@@ -2,9 +2,7 @@
 
 import asyncio
 import json
-import math
 import re
-import zlib
 
 import httpx2
 
@@ -15,17 +13,6 @@ DEFAULT_MODELS = {
     "qwen2.5vl:3b": ["completion", "vision"],
     "nomic-embed-text:latest": ["embedding"],
 }
-
-
-def fake_vector(text: str, dims: int = 16) -> list[float]:
-    """Bag-of-words vector: texts sharing words point the same way. Task prefixes are ignored."""
-    if text.startswith("search_"):
-        text = text.split(": ", 1)[-1]
-    vector = [0.0] * dims
-    for word in re.findall(r"[a-z]+", text.lower()):
-        vector[zlib.crc32(word.encode()) % dims] += 1.0
-    norm = math.sqrt(sum(x * x for x in vector)) or 1.0
-    return [x / norm for x in vector]
 
 
 FIGURE_REPLY = """Type: chart
@@ -92,14 +79,6 @@ class FakeOllama:
             if name not in self.models:
                 return self._not_found(name)
             return httpx2.Response(200, json={"capabilities": self.models[name]})
-
-        if route == ("POST", "/api/embed"):
-            name = full_name(body["model"])
-            if name not in self.models:
-                return self._not_found(name)
-            if name not in self.loaded:
-                self.loaded.append(name)
-            return httpx2.Response(200, json={"model": name, "embeddings": [fake_vector(t) for t in body["input"]]})
 
         if route == ("POST", "/api/chat"):
             name = full_name(body["model"])

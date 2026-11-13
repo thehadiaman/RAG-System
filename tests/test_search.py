@@ -68,7 +68,7 @@ class StubEmbedder:
 
     async def embed_query(self, question: str) -> list[float]:
         if self.down:
-            raise EmbedderError("Embedding model nomic-embed-text isn't installed. Run: ollama pull nomic-embed-text")
+            raise EmbedderError("The search model's files are missing")
         return self.vectors.get(question, [0.3, 0.3, 0.3])
 
 
@@ -156,7 +156,7 @@ async def test_falls_back_to_keywords_when_the_embedder_is_down(store):
     result = await search.search("EBITDA margin")
 
     assert result.mode == "keyword_only"
-    assert "ollama pull nomic-embed-text" in result.notice
+    assert "The search model's files are missing" in result.notice
     assert ids(result) == ["a_ebitda"]
     assert result.hits[0].found_by == ["keyword"]
 

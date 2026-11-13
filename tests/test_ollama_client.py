@@ -44,14 +44,15 @@ async def test_unreachable_ollama_raises_a_clear_error():
         await client.list_models()
 
 
-async def test_use_only_unloads_other_models_but_keeps_the_embedder():
+async def test_use_only_unloads_every_other_model():
+    # Search runs inside the app now, so an embedding model left in Ollama is unloaded too.
     fake = FakeOllama(loaded=["llama3.2:3b", "nomic-embed-text:latest"])
     client = fake.client(keep_alive="15m")
 
-    unloaded = await client.use_only("qwen2.5vl:3b", keep=("nomic-embed-text",))
+    unloaded = await client.use_only("qwen2.5vl:3b")
 
-    assert unloaded == ["llama3.2:3b"]
-    assert sorted(fake.loaded) == ["nomic-embed-text:latest", "qwen2.5vl:3b"]
+    assert unloaded == ["llama3.2:3b", "nomic-embed-text:latest"]
+    assert fake.loaded == ["qwen2.5vl:3b"]
     load_call = fake.calls_to("/api/generate")[-1]
     assert load_call == {"model": "qwen2.5vl:3b", "keep_alive": "15m"}
 
@@ -71,16 +72,6 @@ async def test_use_only_matches_names_with_or_without_latest_tag():
     unloaded = await fake.client().use_only("mistral")
 
     assert unloaded == []
-
-
-async def test_use_only_never_unloads_keep_loaded_models():
-    fake = FakeOllama(loaded=["nomic-embed-text:latest", "llama3.2:3b"])
-    client = fake.client(keep_loaded=("nomic-embed-text",))
-
-    unloaded = await client.use_only("qwen2.5vl:3b")
-
-    assert unloaded == ["llama3.2:3b"]
-    assert "nomic-embed-text:latest" in fake.loaded
 
 
 async def test_has_model_accepts_names_with_or_without_tag():

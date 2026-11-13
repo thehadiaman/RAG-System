@@ -53,7 +53,7 @@ async def health(
     components = {
         "database": await _probe("database", database),
         "vectors": await _probe("vectors", vector_store),
-        "embedder": Component(ok=problem is None, detail=problem or embedder.model),
+        "embedder": Component(ok=problem is None, detail=problem or embedder.label),
     }
     status = "ok" if all(c.ok for c in components.values()) else "degraded"
     return HealthResponse(status=status, version=__version__, components=components)

@@ -14,12 +14,12 @@ from app.config import Settings, get_settings
 from app.ingest.jobs import IngestQueue
 from app.ingest.vision import VisionService
 from app.llm.bedrock import BedrockClient
-from app.llm.embedder import Embedder
+from app.llm.embedder import Embedder, OnnxEmbedder
 from app.llm.ollama import OllamaClient
 from app.search import Searcher
 from app.store import documents as document_store
 from app.store.db import Database
-from app.store.vectors import VectorStore
+from app.store.vectors import VectorStore, collection_for
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -37,11 +37,11 @@ class UIFiles(StaticFiles):
 
 
 def make_ollama(settings: Settings) -> OllamaClient:
-    return OllamaClient(
-        settings.ollama_base_url,
-        keep_alive=settings.ollama_keep_alive,
-        keep_loaded=(settings.ollama_embed_model,),
-    )
+    return OllamaClient(settings.ollama_base_url, keep_alive=settings.ollama_keep_alive)
+
+
+def make_embedder(settings: Settings) -> Embedder:
+    return OnnxEmbedder(settings.embed_model_dir, settings.embed_threads, settings.embed_batch_size)
 
 
 def make_bedrock(settings: Settings) -> BedrockClient:
@@ -63,10 +63,13 @@ async def lifespan(app: FastAPI):
 
     app.state.db = Database(settings.data_dir / "app.db")
     app.state.db.migrate()
-    app.state.vectors = VectorStore(settings.data_dir / "chroma")
+    app.state.embedder = make_embedder(settings)
+    app.state.vectors = VectorStore(settings.data_dir / "chroma", collection_for(app.state.embedder.model))
+    # Documents indexed by an earlier search model are indexed again when the worker starts.
+    for name in app.state.vectors.remove_other_collections():
+        log.info("Removed search vectors made by an earlier search model (%s)", name)
 
     app.state.ollama = make_ollama(settings)
-    app.state.embedder = Embedder(app.state.ollama, settings.ollama_embed_model, settings.embed_batch_size)
     app.state.bedrock = make_bedrock(settings)
     app.state.searcher = Searcher(app.state.db, app.state.vectors, app.state.embedder)
     app.state.answerer = Answerer(
@@ -118,8 +121,8 @@ async def log_startup_summary(app: FastAPI, settings: Settings) -> None:
         log.info("PDF RAG %s on http://%s:%s", __version__, settings.app_host, settings.app_port)
         log.info("Data in %s: schema v%d, %d documents, %d search chunks",
                  settings.data_dir, state.db.ping(), documents, chunks)
-        problem = await state.embedder.problem()
-        log.info("Embedding model %s: %s", settings.ollama_embed_model, problem or "ready")
+        problem = await state.embedder.problem()  # also loads the model, so the first search is quick
+        log.info("Search model %s: %s", state.embedder.label, problem or "ready")
         for extractor in ("local", "aws"):
             problem = await state.vision.problem(extractor)
             log.info("Charts read by %s: %s", state.vision.label(extractor), problem or "ready")

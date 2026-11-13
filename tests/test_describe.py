@@ -35,7 +35,7 @@ def add_sample(db, data_dir, extractor):
 
 def queue(db, data_dir, ollama: FakeOllama | None = None, bedrock: FakeBedrock | None = None) -> IngestQueue:
     vision = VisionService(
-        (ollama or FakeOllama()).client(keep_loaded=("nomic-embed-text",)),
+        (ollama or FakeOllama()).client(),
         bedrock or FakeBedrock(),
         local_model="qwen2.5vl:3b",
     )

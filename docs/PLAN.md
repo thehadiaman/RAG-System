@@ -20,7 +20,7 @@ The app was built in 13 small phases. Each phase was planned, approved, built, t
 | AWS region | `us-east-1` (configurable). |
 | Local vision model | `qwen2.5vl:latest` (7B), the one installed. It runs about half on the CPU with a 6 GB GPU; `qwen2.5vl:3b` fits fully. |
 | GPU use | One chat or vision model in the GPU at a time. A shared lock makes chat answers and chart reading take turns. |
-| Embeddings | `nomic-embed-text` in Ollama, on the CPU, always loaded. |
+| Embeddings | `nomic-embed-text` in Ollama, on the CPU, always loaded. Since Phase 14: the same model built into the app (quantised ONNX on onnxruntime), so search works without Ollama. |
 | Storage | SQLite (documents, chats, FTS5 keyword index, numbered migrations) and ChromaDB (vectors), all under `./data`. |
 | PDF reading | PyMuPDF and pymupdf4llm (AGPL-3.0). |
 | Search | Meaning search and keyword search merged with Reciprocal Rank Fusion. |
@@ -74,3 +74,46 @@ A PDF not used during the build, the Dubai Islamic Bank FY 2025 investor present
 Five of ten were correct, two were partly right, and three were wrong or missed. In every miss the page with the answer was among the top two search results, so retrieval worked and the local 7B model didn't use what it was given. Answers took about 60 seconds each. The number check flagged the one citation slip that involved a number. It can't catch a wrong answer with no number in it ("Government") or a missed answer.
 
 What would raise accuracy most is a stronger answer model, for example Qwen2.5-VL on AWS once it is set up. Fewer sources per answer (`CHAT_MAX_SOURCES`) may also help a small model focus, but that wasn't tested.
+
+## After v1.0: sessions, several people, no Ollama
+
+New requirements, given after v1.0:
+
+- Delete PDFs. (This already worked from a document's details; a delete button in the list is planned.)
+- Sessions: each session holds its own PDFs and chats, and questions are answered from that session's PDFs.
+- Several people use the app at once. There are no logins: a cookie in each person's browser says which sessions are theirs.
+- A session that isn't used for more than a day is deleted, with its PDFs.
+- The app works when Ollama isn't installed.
+- It runs on this PC for the local network, and later on a cloud server.
+
+Decisions:
+
+| Topic | Choice |
+|---|---|
+| Who sees what | No accounts. A random secret cookie per browser; each browser sees only the sessions it created. |
+| Answers without Ollama | Amazon Nova Lite and Nova Pro on Bedrock, next to Qwen2.5-VL on AWS and any Ollama models. |
+| Search without Ollama | The search model runs inside the app. |
+
+| # | Phase | Delivered | Findings |
+|---|---|---|---|
+| 14 | Search without Ollama | nomic-embed-text v1.5 runs inside the app: quantised ONNX on onnxruntime, built into the image (pinned revision, checked hashes). Each search model has its own vector collection, and documents indexed by an earlier model are re-indexed once at startup. | See below. |
+| 15 | Answers without Ollama | Planned | |
+| 16 | Sessions: storage and API | Planned | |
+| 17 | Sessions: web page | Planned | |
+| 18 | Idle clean-up | Planned | |
+| 19 | Many people at once | Planned | |
+| 20 | Hosting | Planned | |
+
+### Phase 14: choosing how to run the search model
+
+The same 19 questions with known answer pages (10 from Phase 8 across three decks, 9 from the DIB final test) were searched with each option, over copies of the real index:
+
+| Option | Right page in top 1 / 2 / 3 (hybrid search) | Speed on CPU | Model size |
+|---|---|---|---|
+| Ollama's nomic-embed-text (before) | 12 / 14 / 15 | – | 274 MB |
+| Full model, run in the app | 12 / 14 / 15 (vectors identical to Ollama's) | 13 chunks/s | 520 MB |
+| Quantised model, run in the app (chosen) | 13 / 16 / 17 | 20–25 chunks/s | 137 MB |
+
+The `fastembed` library was tried first. It embeds texts in batches, which padded short texts to the longest one in the batch. It used 6–7 GB of memory with batches of 4–8 texts and ran out of memory with batches of 32. It also downgraded a library that ChromaDB uses. The app instead runs the model with onnxruntime and tokenizers, which ChromaDB already installs. It embeds one text at a time (no padding, so it is also the fastest way) with onnxruntime's memory pool turned off. A worst-case 2,048-token text peaks at about 1 GB, and memory falls back afterwards. The app uses about 500 MB with the model loaded.
+
+With Ollama unreachable, a 29-page deck was uploaded (text only), indexed, and searched in normal hybrid mode, with the right page first or second for each question. On the live app, the 19 questions gave the same results as the comparison above, and a search took about 20 ms.

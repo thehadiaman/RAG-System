@@ -5,7 +5,7 @@ import { h } from "./dom.js";
 const NAMES = {
   database: "Database",
   vectors: "Search index",
-  embedder: "Search (embedding model)",
+  embedder: "Search model",
   ollama: "Ollama",
 };
 

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from tests.fake_bedrock import FakeBedrock
+from tests.fake_embedder import FakeEmbedder
 from tests.fake_ollama import FakeOllama
 
 
@@ -36,16 +37,20 @@ def fake_bedrock():
 
 
 @pytest.fixture
-def make_app(data_dir, fake_ollama, fake_bedrock, monkeypatch):
-    """Builds the real app, with its data in a temp folder and fake Ollama and AWS behind it."""
+def fake_embedder():
+    return FakeEmbedder()
+
+
+@pytest.fixture
+def make_app(data_dir, fake_ollama, fake_bedrock, fake_embedder, monkeypatch):
+    """Builds the real app, with its data in a temp folder and fakes for Ollama, AWS and the search model."""
     import app.main as main
 
     monkeypatch.setenv("VISION_LOCAL_MODEL", "qwen2.5vl:3b")
     monkeypatch.setattr("app.ingest.describe.RETRY_DELAY", 0)
     get_settings.cache_clear()
-    monkeypatch.setattr(
-        main, "make_ollama", lambda settings: fake_ollama.client(keep_loaded=(settings.ollama_embed_model,))
-    )
+    monkeypatch.setattr(main, "make_ollama", lambda settings: fake_ollama.client())
+    monkeypatch.setattr(main, "make_embedder", lambda settings: fake_embedder)
     monkeypatch.setattr(main, "make_bedrock", lambda settings: fake_bedrock)
     return main.create_app
 
